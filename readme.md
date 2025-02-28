@@ -1,17 +1,29 @@
-# CUPS Print Server
+# FLUX <-> CUPS Print Server
 
-A simple REST API server written in Rust that interfaces with CUPS (Common UNIX Printing System) to handle print jobs and retrieve printer information.
+A REST API server written in Rust that interfaces with CUPS (Common UNIX Printing System) to handle print jobs and retrieve printer information. It can receive print jobs via WebSocket and poll for new printers and print jobs.
 
 ## Features
 
-- `GET /printers` - List all available printers with details (name, description, location, make/model, supported paper sizes)
-- `POST /print?printer=<printer_name>` - Upload and print a file using the specified printer
+- REST API endpoints:
+    - `GET /printers` - List all available printers with details (name, description, location, make/model, supported paper sizes)
+    - `POST /print?printer=<printer_name>` - Upload and print a file using the specified printer
+    - `GET /check_printers` - Manually check for new printers
+    - `GET /check_jobs` - Manually check for print jobs
+
+- WebSocket integration:
+    - Subscribes to a Laravel Reverb WebSocket channel for real-time print job notifications
+    - Listens on the "private-FluxErp.Models.PrintJobs" channel for "PrintJobCreated" events
+
+- Admin interface:
+    - Web UI for configuration
+    - Configuration settings for instance name, API endpoints, and authentication tokens
+    - Buttons to trigger printer detection and job checking
 
 ## Requirements
 
 - Rust (1.56 or newer)
 - CUPS (installed and configured)
-- curl (for testing)
+- WebSocket server (Laravel Reverb)
 
 ## Installation
 
@@ -43,34 +55,45 @@ git clone https://github.com/Team-Nifty-GmbH/flux-rust-spooler
 cd flux-rust-spooler
 ```
 
-2. Add the dependencies to your `Cargo.toml`:
+2. Dependencies in `Cargo.toml`:
 ```toml
 [dependencies]
-actix-web = "4.0"
-actix-multipart = "0.4"
+actix-web = "4"
+actix-files = "0.6"
+actix-multipart = "0.6"
 futures = "0.3"
+reqwest = { version = "0.11", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tempfile = "3.2"
+dirs = "5.0"
+tokio = { version = "1", features = ["full", "macros", "rt-multi-thread"] }
+tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
+tempfile = "3.8"
+url = "2.4"
 ```
 
 3. Compile the application:
 
-#### For Linux (x86_64)
 ```bash
 cargo build --release
 ```
 
-#### For macOS (Intel x86_64)
-```bash
-cargo build --release
-```
+## Configuration
 
-#### For macOS (Apple Silicon)
-```bash
-rustup target add aarch64-apple-darwin
-cargo build --release --target aarch64-apple-darwin
-```
+The application stores its configuration in `~/.config/flux-spooler/config.json`. The configuration includes:
+
+- `instance_name`: Name for this printer server instance
+- `host_url`: Base URL for API endpoints
+- `printer_check_interval`: Interval in minutes to check for new printers
+- `job_check_interval`: Interval in minutes to check for print jobs
+- `notification_token`: Authentication token for printer notifications
+- `print_jobs_token`: Authentication token for print jobs
+- `admin_port`: Port for the admin interface
+- `api_port`: Port for the API
+- `websocket_url`: WebSocket URL for real-time job notifications
+- `websocket_auth_token`: Authentication token for WebSocket
+
+You can modify these settings using the admin interface or by directly editing the configuration file.
 
 ## Usage
 
@@ -81,7 +104,9 @@ cargo build --release --target aarch64-apple-darwin
 ./target/release/flux-rust-spooler
 ```
 
-By default, the server runs on http://127.0.0.1:8080
+By default, the server runs:
+- API server on http://127.0.0.1:8080
+- Admin interface on http://127.0.0.1:8081
 
 ### Setting up as a System Service (Linux)
 
@@ -93,7 +118,7 @@ sudo nano /etc/systemd/system/flux-rust-spooler.service
 2. Paste the following content, replacing the placeholders with your values:
 ```ini
 [Unit]
-Description=CUPS Print Server
+Description=FLUX <-> CUPS Print Server
 After=network.target cups.service
 Requires=cups.service
 
@@ -167,6 +192,23 @@ nano ~/Library/LaunchAgents/com.teamnifty.flux-rust-spooler.plist
 launchctl load ~/Library/LaunchAgents/com.teamnifty.flux-rust-spooler.plist
 ```
 
+## WebSocket Integration
+
+The application connects to a WebSocket server to receive real-time print job notifications. It listens for "PrintJobCreated" events on the "private-FluxErp.Models.PrintJobs" channel. When an event is received, it:
+
+1. Checks if the job is for this print server instance
+2. Fetches the file using the media ID
+3. Sends the file to the specified printer using CUPS
+
+## Admin Interface
+
+The admin interface is available at http://127.0.0.1:8081 (or the configured admin port). It allows you to:
+
+1. Configure server settings
+2. Manually check for new printers
+3. Manually check for print jobs
+4. Reconnect to the WebSocket server
+
 ## API Examples
 
 ### List All Printers
@@ -208,6 +250,18 @@ Example output:
 Print job submitted: request id is HP_LaserJet_Pro_MFP-123 (1 file(s))
 ```
 
+### Check for New Printers
+
+```bash
+curl http://127.0.0.1:8080/check_printers
+```
+
+### Check for Print Jobs
+
+```bash
+curl http://127.0.0.1:8080/check_jobs
+```
+
 ## Troubleshooting
 
 ### Empty Printer List
@@ -242,6 +296,12 @@ cat /var/log/cups/error_log  # macOS
 ```bash
 sudo lpstat -t
 ```
+
+### WebSocket Connection Issues
+
+1. Check that the WebSocket URL is correctly configured
+2. Ensure the WebSocket authentication token is valid
+3. Verify that the connection is not being blocked by a firewall
 
 ## Contributing
 
