@@ -1,7 +1,8 @@
 use actix_files as fs_web;
 use actix_multipart::Multipart;
-use actix_web::{App, Error, HttpResponse, HttpServer, Responder, get, post, web};
+use actix_web::{get, post, web, App, Error, HttpResponse, HttpServer, Responder};
 use futures::{StreamExt, TryStreamExt};
+use local_ip_address::local_ip;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -12,23 +13,25 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio::time;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-use futures::{SinkExt};
-use serde_json::Value;
 
 // Configuration structure
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Config {
-    instance_name: String,                  // Name for this printer server instance
-    printer_check_interval: u64,            // in minutes
-    job_check_interval: u64,                // in minutes
-    host_url: String,                       // Base URL for all API endpoints
-    notification_token: String,             // Authentication token for notifications
-    print_jobs_token: String,               // Authentication token for print jobs
-    admin_port: u16,                        // Admin interface port
-    api_port: u16,                          // API port
-    websocket_url: String,                  // WebSocket URL for real-time job notifications
-    websocket_auth_token: String,           // Authentication token for WebSocket
+    instance_name: String,        // Name for this printer server instance
+    printer_check_interval: u64,  // in minutes
+    job_check_interval: u64,      // in minutes
+    host_url: String,             // Base URL for all API endpoints
+    notification_token: String,   // Authentication token for notifications
+    print_jobs_token: String,     // Authentication token for print jobs
+    admin_port: u16,              // Admin interface port
+    api_port: u16,                // API port
+    websocket_url: String,        // WebSocket URL for real-time job notifications
+    websocket_auth_token: String, // Authentication token for WebSocket
+    reverb_app_id: String,
+    reverb_app_key: String,
+    reverb_app_secret: String,
+    reverb_use_tls: bool,
+    reverb_host: Option<String>,
 }
 
 impl Default for Config {
@@ -44,6 +47,11 @@ impl Default for Config {
             api_port: 8080,
             websocket_url: "ws://example.com/socket".to_string(),
             websocket_auth_token: "default-websocket-token".to_string(),
+            reverb_app_id: "default-app-id".to_string(),
+            reverb_app_key: "default-app-key".to_string(),
+            reverb_app_secret: "default-app-secret".to_string(),
+            reverb_use_tls: true,
+            reverb_host: None,
         }
     }
 }
@@ -412,9 +420,7 @@ async fn print_file(
 
             if output.status.success() {
                 let success_msg = String::from_utf8_lossy(&output.stdout);
-                return Ok(
-                    HttpResponse::Ok().body(format!("Print job submitted: {}", success_msg))
-                );
+                return Ok(HttpResponse::Ok().body(format!("Print job submitted: {}", success_msg)));
             } else {
                 let error_msg = String::from_utf8_lossy(&output.stderr);
                 return Ok(HttpResponse::InternalServerError()
@@ -553,12 +559,18 @@ async fn handle_print_job(
     }
 
     // Construct the URL to get the file
-    let file_url = format!("{}/api/media/{}/download", config.host_url, print_job.media_id);
+    let file_url = format!(
+        "{}/api/media/{}/download",
+        config.host_url, print_job.media_id
+    );
 
     // Download the file
     let file_response = http_client
         .get(&file_url)
-        .header("Authorization", format!("Bearer {}", config.print_jobs_token))
+        .header(
+            "Authorization",
+            format!("Bearer {}", config.print_jobs_token),
+        )
         .send()
         .await?;
 
@@ -568,7 +580,7 @@ async fn handle_print_job(
             print_job.media_id,
             file_response.status()
         )
-            .into());
+        .into());
     }
 
     let file_content = file_response.bytes().await?;
@@ -603,7 +615,7 @@ async fn handle_print_job(
             "Failed to print: {}",
             String::from_utf8_lossy(&output.stderr)
         )
-            .into());
+        .into());
     }
 
     Ok(())
@@ -627,7 +639,7 @@ async fn printer_checker_task(
             client_data.clone(),
             config_data.clone(),
         )
-            .await
+        .await
         {
             Ok(new_printers) => {
                 if !new_printers.is_empty() {
@@ -747,163 +759,153 @@ async fn job_checker_task(config: Arc<Mutex<Config>>, http_client: Client) {
 // Function to handle WebSocket connection for real-time print jobs
 async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
     loop {
-        let websocket_url;
-        let websocket_auth_token;
+        let app_key;
+        let app_secret;
+        let cluster;
+        let use_tls;
         let config_clone;
+        let host;
 
         {
             let config_guard = config.lock().unwrap();
-            websocket_url = config_guard.websocket_url.clone();
-            websocket_auth_token = config_guard.websocket_auth_token.clone();
+            app_key = config_guard.reverb_app_key.clone();
+            app_secret = config_guard.reverb_app_secret.clone();
+            // Extract cluster from host or use default
+            cluster = config_guard
+                .reverb_host
+                .clone()
+                .unwrap_or_else(|| "mt1".to_string());
+            use_tls = config_guard.reverb_use_tls;
+            host = config_guard.reverb_host.clone();
             config_clone = config_guard.clone();
         }
 
-        println!("Connecting to WebSocket at: {}", websocket_url);
+        println!("Initializing Pusher client with app key: {}", app_key);
 
-        // Connect to the WebSocket server
-        let ws_stream = match connect_async(&websocket_url).await {
-            Ok((ws_stream, _)) => ws_stream,
+        // Create Pusher client configuration
+        let pusher_config = pusher_rs::PusherConfig {
+            app_key,
+            app_secret,
+            cluster,
+            use_tls,
+            host,
+            max_reconnection_attempts: 5,
+            ..Default::default()
+        };
+
+        // Create Pusher client
+        let mut pusher = match pusher_rs::PusherClient::new(pusher_config) {
+            Ok(client) => client,
             Err(e) => {
-                eprintln!("Failed to connect to WebSocket: {}", e);
-                time::sleep(Duration::from_secs(30)).await;
+                eprintln!("Failed to create Pusher client: {:?}", e);
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
                 continue;
             }
         };
 
-        println!("WebSocket connected, subscribing to channel");
-
-        // Split the WebSocket stream
-        let (mut write, mut read) = ws_stream.split();
-
-        // Send authentication message
-        let auth_message = serde_json::json!({
-            "type": "auth",
-            "token": websocket_auth_token
-        });
-
-        if let Err(e) = write.send(Message::Text(auth_message.to_string())).await {
-            eprintln!("Failed to send authentication message: {}", e);
-            time::sleep(Duration::from_secs(30)).await;
-            continue;
+        match pusher.connect().await {
+            Ok(_) => println!("Connected to Pusher successfully"),
+            Err(e) => {
+                eprintln!("Failed to connect to Pusher: {:?}", e);
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                continue;
+            }
         }
 
-        // Subscribe to the channel
-        let subscribe_message = serde_json::json!({
-            "type": "subscribe",
-            "channel": "private-FluxErp.Models.PrintJobs"
-        });
+        println!("Pusher client initialized, subscribing to print jobs channel");
 
-        if let Err(e) = write.send(Message::Text(subscribe_message.to_string())).await {
-            eprintln!("Failed to send subscription message: {}", e);
-            time::sleep(Duration::from_secs(30)).await;
-            continue;
+        // Subscribe to the print jobs channel
+        let channel_name = "private-FluxErp.Models.PrintJobs";
+
+        // Subscribe to the channel (using the corrected method signature)
+        match pusher.subscribe(channel_name).await {
+            Ok(_) => println!("Successfully subscribed to channel: {}", channel_name),
+            Err(e) => {
+                eprintln!("Failed to subscribe to channel: {:?}", e);
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                continue;
+            }
         }
 
-        println!("Subscribed to print jobs channel, waiting for events");
+        println!(
+            "Subscribed to print jobs channel, setting up event handler for PrintJobCreated event"
+        );
 
-        // Create a channel to communicate between the reader and writer
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Message>(32);
-
-        // Spawn a task to handle incoming messages
+        // Set up an event handler using a callback function for the specific event
         let http_client_clone = http_client.clone();
         let config_for_handler = config_clone.clone();
-        let message_tx = tx.clone();
 
-        let message_handler = tokio::spawn(async move {
-            while let Some(message) = read.next().await {
-                match message {
-                    Ok(Message::Text(text)) => {
-                        println!("Received WebSocket message: {}", text);
+        // The bind method requires a callback function instead of returning a stream
+        let connection_result = pusher
+            .bind("PrintJobCreated", move |event| {
+                println!("Received print job event: {:?}", event);
 
-                        // Parse the message to extract the print job event
-                        match serde_json::from_str::<Value>(&text) {
-                            Ok(json) => {
-                                // Check if this is a PrintJobCreated event
-                                if let Some(event) = json.get("event") {
-                                    if event.as_str() == Some("PrintJobCreated") {
-                                        if let Some(data) = json.get("data") {
-                                            // Parse the print job data
-                                            match serde_json::from_value::<WebsocketPrintJob>(data.clone()) {
-                                                Ok(print_job) => {
-                                                    // Handle the print job
-                                                    let client_clone = http_client_clone.clone();
-                                                    let config_ref = config_for_handler.clone();
+                // The data field is of type Value (likely serde_json::Value)
+                let data = event.data;
 
-                                                    tokio::spawn(async move {
-                                                        if let Err(e) = handle_print_job(print_job, &client_clone, &config_ref).await {
-                                                            eprintln!("Error handling WebSocket print job: {}", e);
-                                                        }
-                                                    });
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("Failed to parse print job data: {}", e);
-                                                }
-                                            }
-                                        }
+                // Convert the Value to a string for parsing
+                match serde_json::to_string(&data) {
+                    Ok(event_data) => {
+                        println!("Event data as string: {}", event_data);
+
+                        // Parse the print job data
+                        match serde_json::from_str::<WebsocketPrintJob>(&event_data) {
+                            Ok(print_job) => {
+                                // Handle the print job
+                                let client_clone = http_client_clone.clone();
+                                let config_ref = config_for_handler.clone();
+
+                                // Spawn a new task to handle the print job
+                                tokio::spawn(async move {
+                                    if let Err(e) =
+                                        handle_print_job(print_job, &client_clone, &config_ref)
+                                            .await
+                                    {
+                                        eprintln!("Error handling WebSocket print job: {}", e);
                                     }
-                                }
+                                });
                             }
                             Err(e) => {
-                                eprintln!("Failed to parse WebSocket message: {}", e);
+                                eprintln!("Failed to parse print job data: {}", e);
+                                // Print the data to help with debugging
+                                println!("Raw data: {}", event_data);
                             }
                         }
-                    },
-                    Ok(Message::Ping(ping)) => {
-                        // Send Pong response through the channel
-                        if let Err(e) = message_tx.send(Message::Pong(ping)).await {
-                            eprintln!("Failed to queue pong: {}", e);
-                            break;
-                        }
-                    },
-                    Ok(Message::Close(_)) => {
-                        println!("WebSocket connection closed by server");
-                        break;
-                    },
+                    }
                     Err(e) => {
-                        eprintln!("WebSocket error: {}", e);
-                        break;
-                    },
-                    _ => {}
+                        eprintln!("Failed to convert event data to string: {:?}", e);
+                    }
                 }
-            }
-        });
+            })
+            .await;
 
-        // Spawn a task for heartbeat
-        let heartbeat_tx = tx.clone();
-        let heartbeat = tokio::spawn(async move {
-            loop {
-                time::sleep(Duration::from_secs(30)).await;
-                if heartbeat_tx.send(Message::Ping(vec![])).await.is_err() {
-                    // Channel closed, exit the task
-                    break;
-                }
-            }
-        });
+        // Check if binding was successful
+        if let Err(e) = connection_result {
+            eprintln!("Failed to bind to event: {:?}", e);
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            continue;
+        }
 
-        // Task to forward messages from channel to WebSocket
-        let writer_task = tokio::spawn(async move {
-            while let Some(msg) = rx.recv().await {
-                if let Err(e) = write.send(msg).await {
-                    eprintln!("Error sending WebSocket message: {}", e);
-                    break;
-                }
-            }
-        });
+        println!("Bound to PrintJobCreated event, waiting for events");
 
-        // Use futures::future::select_all to wait for any task to complete
-        // (which indicates an error or disconnect)
-        let _ = futures::future::select_all(vec![
-            message_handler,
-            heartbeat,
-            writer_task,
-        ]).await;
+        // Since pusher_rs handles events through callbacks, we need to keep the connection alive
+        // The simplest way is to just wait indefinitely or until an error occurs
+        match pusher.connect().await {
+            Ok(_) => {
+                println!("Connected to Pusher successfully");
+                // Wait for disconnection
+                tokio::time::sleep(tokio::time::Duration::from_secs(u64::MAX)).await;
+            }
+            Err(e) => {
+                eprintln!("Failed to connect to Pusher: {:?}", e);
+            }
+        }
 
         // If we reach here, the connection was closed or failed, wait before reconnecting
-        println!("WebSocket connection closed, reconnecting in 30 seconds...");
-        time::sleep(Duration::from_secs(30)).await;
+        println!("Connection lost, reconnecting in 30 seconds...");
+        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
     }
 }
-
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     // Load configuration
@@ -956,14 +958,16 @@ async fn main() -> std::io::Result<()> {
     let api_port = config.lock().unwrap().api_port;
     let admin_port = config.lock().unwrap().admin_port;
 
+    match local_ip() {
+        Ok(ip) => println!("Local IP address: {}", ip),
+        Err(e) => eprintln!("Failed to get local IP: {}", e),
+    }
+
     println!(
-        "Starting CUPS print server API on http://127.0.0.1:{}",
+        "Starting CUPS print server API on http://0.0.0.0:{}",
         api_port
     );
-    println!(
-        "Starting Admin interface on http://127.0.0.1:{}",
-        admin_port
-    );
+    println!("Starting Admin interface on http://0.0.0.0:{}", admin_port);
 
     // API Server
     let api_server = HttpServer::new(move || {
@@ -976,7 +980,7 @@ async fn main() -> std::io::Result<()> {
             .service(check_jobs_endpoint)
             .service(check_printers_endpoint)
     })
-        .bind(format!("127.0.0.1:{}", api_port))?;
+    .bind(format!("0.0.0.0:{}", api_port))?;
 
     // Admin Server with static files and config API
     let home_dir = dirs::home_dir().expect("Failed to get home directory");
@@ -989,7 +993,7 @@ async fn main() -> std::io::Result<()> {
             .service(update_config)
             .service(fs_web::Files::new("/", admin_dir.to_str().unwrap()).index_file("index.html"))
     })
-        .bind(format!("127.0.0.1:{}", admin_port))?;
+    .bind(format!("0.0.0.0:{}", admin_port))?;
 
     // Create admin folder and HTML
     create_admin_interface()?;
