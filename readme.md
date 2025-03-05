@@ -5,25 +5,27 @@ A REST API server written in Rust that interfaces with CUPS (Common UNIX Printin
 ## Features
 
 - REST API endpoints:
-    - `GET /printers` - List all available printers with details (name, description, location, make/model, supported paper sizes)
-    - `POST /print?printer=<printer_name>` - Upload and print a file using the specified printer
-    - `GET /check_printers` - Manually check for new printers
-    - `GET /check_jobs` - Manually check for print jobs
+  - `GET /printers` - List all available printers with details (name, description, location, make/model, supported paper sizes)
+  - `POST /print?printer=<printer_name>` - Upload and print a file using the specified printer
+  - `GET /check_printers` - Manually check for new printers
+  - `GET /check_jobs` - Manually check for print jobs
 
-- WebSocket integration:
-    - Subscribes to a Laravel Reverb WebSocket channel for real-time print job notifications
-    - Listens on the "private-FluxErp.Models.PrintJobs" channel for "PrintJobCreated" events
+- Real-time print job processing:
+  - Subscribes to Laravel Reverb WebSocket for real-time print job notifications
+  - Listens on the "private-FluxErp.Models.PrintJobs" channel for "PrintJobCreated" events
+  - Automatic polling for new print jobs via API
 
 - Admin interface:
-    - Web UI for configuration
-    - Configuration settings for instance name, API endpoints, and authentication tokens
-    - Buttons to trigger printer detection and job checking
+  - Web UI for configuration
+  - Configuration settings for instance name, API endpoints, authentication tokens, and Reverb integration
+  - Buttons to trigger printer detection and job checking
+  - WebSocket reconnection option
 
 ## Requirements
 
 - Rust (1.56 or newer)
 - CUPS (installed and configured)
-- WebSocket server (Laravel Reverb)
+- Laravel Reverb server for WebSocket integration
 
 ## Installation
 
@@ -67,9 +69,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5.0"
 tokio = { version = "1", features = ["full", "macros", "rt-multi-thread"] }
-tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
 tempfile = "3.8"
-url = "2.4"
+pusher-rs = "0.4" # For Laravel Reverb integration
+local-ip-address = "0.5" # For getting local IP
 ```
 
 3. Compile the application:
@@ -83,15 +85,20 @@ cargo build --release
 The application stores its configuration in `~/.config/flux-spooler/config.json`. The configuration includes:
 
 - `instance_name`: Name for this printer server instance
-- `host_url`: Base URL for API endpoints
 - `printer_check_interval`: Interval in minutes to check for new printers
 - `job_check_interval`: Interval in minutes to check for print jobs
+- `host_url`: Base URL for all API endpoints
 - `notification_token`: Authentication token for printer notifications
 - `print_jobs_token`: Authentication token for print jobs
-- `admin_port`: Port for the admin interface
-- `api_port`: Port for the API
+- `admin_port`: Admin interface port
+- `api_port`: API port
 - `websocket_url`: WebSocket URL for real-time job notifications
 - `websocket_auth_token`: Authentication token for WebSocket
+- `reverb_app_id`: Laravel Reverb application ID
+- `reverb_app_key`: Laravel Reverb application key
+- `reverb_app_secret`: Laravel Reverb application secret
+- `reverb_use_tls`: Whether to use TLS for Laravel Reverb connection
+- `reverb_host`: Optional custom host for Laravel Reverb (defaults to "mt1")
 
 You can modify these settings using the admin interface or by directly editing the configuration file.
 
@@ -105,8 +112,10 @@ You can modify these settings using the admin interface or by directly editing t
 ```
 
 By default, the server runs:
-- API server on http://127.0.0.1:8080
-- Admin interface on http://127.0.0.1:8081
+- API server on http://0.0.0.0:8080
+- Admin interface on http://0.0.0.0:8081
+
+The application will output its local IP address at startup to help with connections from other devices.
 
 ### Setting up as a System Service (Linux)
 
@@ -192,17 +201,19 @@ nano ~/Library/LaunchAgents/com.teamnifty.flux-rust-spooler.plist
 launchctl load ~/Library/LaunchAgents/com.teamnifty.flux-rust-spooler.plist
 ```
 
-## WebSocket Integration
+## Laravel Reverb Integration
 
-The application connects to a WebSocket server to receive real-time print job notifications. It listens for "PrintJobCreated" events on the "private-FluxErp.Models.PrintJobs" channel. When an event is received, it:
+The application connects to Laravel Reverb to receive real-time print job notifications. It listens for "PrintJobCreated" events on the "private-FluxErp.Models.PrintJobs" channel. When an event is received, it:
 
 1. Checks if the job is for this print server instance
 2. Fetches the file using the media ID
 3. Sends the file to the specified printer using CUPS
 
+The connection will automatically attempt to reconnect if it fails, with a 30-second delay between reconnection attempts.
+
 ## Admin Interface
 
-The admin interface is available at http://127.0.0.1:8081 (or the configured admin port). It allows you to:
+The admin interface is available at http://0.0.0.0:8081 (or your configured admin port). It allows you to:
 
 1. Configure server settings
 2. Manually check for new printers
@@ -214,7 +225,7 @@ The admin interface is available at http://127.0.0.1:8081 (or the configured adm
 ### List All Printers
 
 ```bash
-curl http://127.0.0.1:8080/printers
+curl http://localhost:8080/printers
 ```
 
 Example output:
@@ -242,7 +253,7 @@ Example output:
 ### Print a File
 
 ```bash
-curl -X POST -F "file=@/path/to/document.pdf" "http://127.0.0.1:8080/print?printer=HP_LaserJet_Pro_MFP"
+curl -X POST -F "file=@/path/to/document.pdf" "http://localhost:8080/print?printer=HP_LaserJet_Pro_MFP"
 ```
 
 Example output:
@@ -253,13 +264,13 @@ Print job submitted: request id is HP_LaserJet_Pro_MFP-123 (1 file(s))
 ### Check for New Printers
 
 ```bash
-curl http://127.0.0.1:8080/check_printers
+curl http://localhost:8080/check_printers
 ```
 
 ### Check for Print Jobs
 
 ```bash
-curl http://127.0.0.1:8080/check_jobs
+curl http://localhost:8080/check_jobs
 ```
 
 ## Troubleshooting
@@ -279,7 +290,13 @@ brew services info cups  # macOS
 lpstat -a
 ```
 
-3. Ensure your user has permission to access CUPS:
+3. Try alternative printer enumeration methods:
+```bash
+lpstat -p  # List printer status
+lpstat -v  # List printer devices
+```
+
+4. Ensure your user has permission to access CUPS:
 ```bash
 sudo usermod -a -G lpadmin yourusername  # Linux
 ```
@@ -297,10 +314,10 @@ cat /var/log/cups/error_log  # macOS
 sudo lpstat -t
 ```
 
-### WebSocket Connection Issues
+### Laravel Reverb Connection Issues
 
-1. Check that the WebSocket URL is correctly configured
-2. Ensure the WebSocket authentication token is valid
+1. Check that the Reverb app ID, key, and secret are correctly configured
+2. Ensure the custom host is properly set if not using the default
 3. Verify that the connection is not being blocked by a firewall
 
 ## Contributing
