@@ -63,8 +63,3 @@ pub fn save_config(config: &Config) {
         Err(e) => eprintln!("Failed to serialize config: {}", e),
     }
 }
-
-/// Get path to admin interface directory
-pub fn admin_dir() -> std::path::PathBuf {
-    config_dir().join("admin")
-}

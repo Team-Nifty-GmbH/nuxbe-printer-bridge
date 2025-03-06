@@ -9,7 +9,6 @@ pub struct Config {
     pub host_url: String,             // Base URL for all API endpoints
     pub notification_token: String,   // Authentication token for notifications
     pub print_jobs_token: String,     // Authentication token for print jobs
-    pub admin_port: u16,              // Admin interface port
     pub api_port: u16,                // API port
     pub reverb_app_id: String,
     pub reverb_app_key: String,
@@ -27,7 +26,6 @@ impl Default for Config {
             host_url: "http://example.com".to_string(),
             notification_token: "default-token".to_string(),
             print_jobs_token: "default-token".to_string(),
-            admin_port: 8081,
             api_port: 8080,
             reverb_app_id: "default-app-id".to_string(),
             reverb_app_key: "default-app-key".to_string(),

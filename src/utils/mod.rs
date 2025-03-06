@@ -1,1 +1,1 @@
-pub mod admin_interface;
+pub mod tui;
