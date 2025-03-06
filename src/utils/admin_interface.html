@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FLUX <-> CUPS Print Server - Admin Panel</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .section {
+            margin-bottom: 25px;
+        }
+        label {
+            display: block;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+        input, select, button {
+            padding: 8px;
+            margin-top: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        input[type="text"], input[type="number"], input[type="password"] {
+            width: 100%;
+            box-sizing: border-box;
+        }
+        input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            font-weight: normal;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        .card {
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin-top: 20px;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .actions {
+            margin-top: 30px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .actions button {
+            flex: 1;
+            min-width: 150px;
+        }
+        #status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        /*.success {*/
+        /*    background-color: #d4edda;*/
+        /*    color: #155724;*/
+        /*}*/
+        /*.error {*/
+        /*    background-color: #f8d7da;*/
+        /*    color: #721c24;*/
+        /*}*/
+        /*.info {*/
+        /*    background-color: #e7f5ff;*/
+        /*    color: #004085;*/
+        /*}*/
+        .hint {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+<h1>FLUX <-> CUPS Print Server - Admin Panel</h1>
+
+<div class="card">
+    <h2>Configuration</h2>
+    <form id="configForm">
+        <div class="section">
+            <h3>Server Settings</h3>
+            <div class="form-group">
+                <label for="instanceName">Instance Name:</label>
+                <input type="text" id="instanceName" name="instance_name" placeholder="e.g., office-printer-server">
+                <div class="hint">Unique name for this printer server instance</div>
+            </div>
+
+            <div class="form-group">
+                <label for="apiPort">API Port:</label>
+                <input type="number" id="apiPort" name="api_port" min="1" max="65535" placeholder="8080">
+                <div class="hint">Port for the REST API endpoints</div>
+            </div>
+
+            <div class="form-group">
+                <label for="adminPort">Admin Port:</label>
+                <input type="number" id="adminPort" name="admin_port" min="1" max="65535" placeholder="8081">
+                <div class="hint">Port for this admin interface</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>Polling Intervals</h3>
+            <div class="form-group">
+                <label for="printerCheckInterval">Printer Check Interval (minutes):</label>
+                <input type="number" id="printerCheckInterval" name="printer_check_interval" min="1" placeholder="5">
+                <div class="hint">How often to check for new printers</div>
+            </div>
+
+            <div class="form-group">
+                <label for="jobCheckInterval">Job Check Interval (minutes):</label>
+                <input type="number" id="jobCheckInterval" name="job_check_interval" min="1" placeholder="2">
+                <div class="hint">How often to poll for new print jobs via API</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>API Integration</h3>
+            <div class="form-group">
+                <label for="hostUrl">Host URL:</label>
+                <input type="text" id="hostUrl" name="host_url" placeholder="https://example.com">
+                <div class="hint">Base URL for API endpoints</div>
+            </div>
+
+            <div class="form-group">
+                <label for="notificationToken">Printer Broadcast Bearer Token:</label>
+                <input type="text" id="notificationToken" name="notification_token" placeholder="your-secret-token">
+                <div class="hint">Authentication token for printer notifications</div>
+            </div>
+
+            <div class="form-group">
+                <label for="printJobsToken">Print Jobs Bearer Token:</label>
+                <input type="text" id="printJobsToken" name="print_jobs_token" placeholder="your-secret-token">
+                <div class="hint">Authentication token for print jobs API</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>Laravel Reverb WebSocket Settings</h3>
+
+            <div class="form-group">
+                <label for="reverbAppId">Reverb App ID:</label>
+                <input type="text" id="reverbAppId" name="reverb_app_id" placeholder="12345">
+                <div class="hint">Laravel Reverb application ID</div>
+            </div>
+
+            <div class="form-group">
+                <label for="reverbAppKey">Reverb App Key:</label>
+                <input type="text" id="reverbAppKey" name="reverb_app_key" placeholder="app-key">
+                <div class="hint">Laravel Reverb application key</div>
+            </div>
+
+            <div class="form-group">
+                <label for="reverbAppSecret">Reverb App Secret:</label>
+                <input type="text" id="reverbAppSecret" name="reverb_app_secret" placeholder="app-secret">
+                <div class="hint">Laravel Reverb application secret</div>
+            </div>
+
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="reverbUseTls" name="reverb_use_tls" checked>
+                    Use TLS for Reverb connection
+                </label>
+            </div>
+
+            <div class="form-group">
+                <label for="reverbHost">Reverb Host (optional):</label>
+                <input type="text" id="reverbHost" name="reverb_host" placeholder="Custom host (leave empty for default)">
+                <div class="hint">Custom host for Laravel Reverb (defaults to "mt1" if empty)</div>
+            </div>
+        </div>
+
+        <button type="submit">Save Configuration</button>
+    </form>
+</div>
+
+<div class="actions">
+    <button id="checkPrinters">Check for New Printers</button>
+    <button id="checkJobs">Check for Print Jobs</button>
+    <button id="reconnectWebsocket">Reconnect WebSocket</button>
+</div>
+
+<div id="status" style="display: none;"></div>
+
+<div class="card" id="printersList" style="display: none;">
+    <h2>Available Printers</h2>
+    <div id="printersContent"></div>
+</div>
+
+<script>
+    // Load the configuration on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        loadConfig();
+        loadPrinters();
+
+        // Form submission
+        document.getElementById('configForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            saveConfig();
+        });
+
+        // Action buttons
+        document.getElementById('checkPrinters').addEventListener('click', checkPrinters);
+        document.getElementById('checkJobs').addEventListener('click', checkJobs);
+        document.getElementById('reconnectWebsocket').addEventListener('click', reconnectWebsocket);
+    });
+
+    // Load configuration from the server
+    function loadConfig() {
+        fetch('/config')
+            .then(response => response.json())
+            .then(config => {
+                document.getElementById('instanceName').value = config.instance_name || '';
+                document.getElementById('hostUrl').value = config.host_url || '';
+                document.getElementById('apiPort').value = config.api_port || 8080;
+                document.getElementById('adminPort').value = config.admin_port || 8081;
+                document.getElementById('printerCheckInterval').value = config.printer_check_interval || 5;
+                document.getElementById('jobCheckInterval').value = config.job_check_interval || 2;
+                document.getElementById('notificationToken').value = config.notification_token || '';
+                document.getElementById('printJobsToken').value = config.print_jobs_token || '';
+                document.getElementById('reverbAppId').value = config.reverb_app_id || '';
+                document.getElementById('reverbAppKey').value = config.reverb_app_key || '';
+                document.getElementById('reverbAppSecret').value = config.reverb_app_secret || '';
+                document.getElementById('reverbUseTls').checked = config.reverb_use_tls !== false;
+                document.getElementById('reverbHost').value = config.reverb_host || '';
+            })
+            .catch(error => {
+                showStatus('Failed to load configuration: ' + error, 'error');
+            });
+    }
+
+    // Load available printers
+    function loadPrinters() {
+        const apiPort = document.getElementById('apiPort')?.value || 8080;
+        const url = getApiUrl(apiPort, '/printers');
+
+        fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                if (data.printers && data.printers.length > 0) {
+                    displayPrinters(data.printers);
+                }
+            })
+            .catch(error => {
+                console.error('Error loading printers:', error);
+            });
+    }
+
+    // Display printers in a table
+    function displayPrinters(printers) {
+        const printersDiv = document.getElementById('printersList');
+        const contentDiv = document.getElementById('printersContent');
+
+        if (printers.length === 0) {
+            contentDiv.innerHTML = '<p>No printers detected</p>';
+            return;
+        }
+
+        let html = '<table style="width: 100%; border-collapse: collapse;">';
+        html += '<thead><tr>';
+        html += '<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Name</th>';
+        html += '<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Description</th>';
+        html += '<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Location</th>';
+        html += '<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Make & Model</th>';
+        html += '</tr></thead><tbody>';
+
+        printers.forEach(printer => {
+            html += '<tr>';
+            html += `<td style="border: 1px solid #ddd; padding: 8px;">${printer.name}</td>`;
+            html += `<td style="border: 1px solid #ddd; padding: 8px;">${printer.description || '-'}</td>`;
+            html += `<td style="border: 1px solid #ddd; padding: 8px;">${printer.location || '-'}</td>`;
+            html += `<td style="border: 1px solid #ddd; padding: 8px;">${printer.make_and_model || '-'}</td>`;
+            html += '</tr>';
+        });
+
+        html += '</tbody></table>';
+        contentDiv.innerHTML = html;
+        printersDiv.style.display = 'block';
+    }
+
+    // Save configuration to the server
+    function saveConfig() {
+        const config = {
+            instance_name: document.getElementById('instanceName').value,
+            host_url: document.getElementById('hostUrl').value,
+            api_port: parseInt(document.getElementById('apiPort').value),
+            admin_port: parseInt(document.getElementById('adminPort').value),
+            printer_check_interval: parseInt(document.getElementById('printerCheckInterval').value),
+            job_check_interval: parseInt(document.getElementById('jobCheckInterval').value),
+            notification_token: document.getElementById('notificationToken').value,
+            print_jobs_token: document.getElementById('printJobsToken').value,
+            reverb_app_id: document.getElementById('reverbAppId').value,
+            reverb_app_key: document.getElementById('reverbAppKey').value,
+            reverb_app_secret: document.getElementById('reverbAppSecret').value,
+            reverb_use_tls: document.getElementById('reverbUseTls').checked,
+            reverb_host: document.getElementById('reverbHost').value || null
+        };
+
+        fetch('/config', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ config })
+        })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to save configuration');
+                }
+                return response.json();
+            })
+            .then(data => {
+                showStatus('Configuration saved successfully!', 'success');
+
+                // Alert user about port changes if they occurred
+                if (data.api_port !== parseInt(window.location.port) &&
+                    data.admin_port !== parseInt(window.location.port)) {
+                    alert('Port settings have been changed. You will need to restart the server for these changes to take effect.');
+                }
+            })
+            .catch(error => {
+                showStatus('Error: ' + error.message, 'error');
+            });
+    }
+
+    // Helper to get API URL based on port
+    function getApiUrl(port, endpoint) {
+        return `http://${window.location.hostname}:${port}${endpoint}`;
+    }
+
+    // Check for new printers
+    function checkPrinters() {
+        showStatus('Checking for new printers...', 'info');
+
+        const apiPort = document.getElementById('apiPort').value;
+        const url = getApiUrl(apiPort, '/check_printers');
+
+        fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                if (data.length === 0) {
+                    showStatus('No new printers found.', 'success');
+                } else {
+                    showStatus(`Found ${data.length} new printer(s)!`, 'success');
+                    // Refresh the printer list
+                    loadPrinters();
+                }
+            })
+            .catch(error => {
+                showStatus('Error checking printers: ' + error, 'error');
+            });
+    }
+
+    // Check for print jobs
+    function checkJobs() {
+        showStatus('Checking for print jobs...', 'info');
+
+        const apiPort = document.getElementById('apiPort').value;
+        const url = getApiUrl(apiPort, '/check_jobs');
+
+        fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                if (data.length === 0) {
+                    showStatus('No print jobs found.', 'success');
+                } else {
+                    showStatus(`Processed ${data.length} print job(s)!`, 'success');
+                }
+            })
+            .catch(error => {
+                showStatus('Error checking jobs: ' + error, 'error');
+            });
+    }
+
+    // Trigger WebSocket reconnection
+    function reconnectWebsocket() {
+        showStatus('Requesting WebSocket reconnection...', 'info');
+
+        // Note: the actual endpoint for reconnection is not implemented in the original code
+        // This function would need to be updated once that endpoint is available
+        showStatus('WebSocket reconnection functionality not implemented yet. Please restart the server manually.', 'error');
+    }
+
+    // Show status message
+    function showStatus(message, type) {
+        const statusDiv = document.getElementById('status');
+        statusDiv.textContent = message;
+        statusDiv.style.display = 'block';
+
+        // Remove existing classes
+        statusDiv.classList.remove('success', 'error', 'info');
+
+        // Add class based on type
+        if (type === 'success') {
+            statusDiv.classList.add('success');
+        } else if (type === 'error') {
+            statusDiv.classList.add('error');
+        } else if (type === 'info') {
+            statusDiv.classList.add('info');
+        }
+    }
+</script>
+</body>
+</html>
