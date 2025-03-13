@@ -15,6 +15,7 @@ pub struct Config {
     pub reverb_app_secret: String,
     pub reverb_use_tls: bool,
     pub reverb_host: Option<String>,
+    pub reverb_auth_endpoint: String,
 }
 
 impl Default for Config {
@@ -32,6 +33,7 @@ impl Default for Config {
             reverb_app_secret: "default-app-secret".to_string(),
             reverb_use_tls: true,
             reverb_host: None,
+            reverb_auth_endpoint: "http://example.com/auth".to_string(),
         }
     }
 }

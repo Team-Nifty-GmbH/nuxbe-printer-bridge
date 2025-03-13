@@ -1,8 +1,12 @@
+use reverb_rs::private_channel;
+use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use reqwest::Client;
 use tokio;
 use serde_json;
-
+use reverb_rs::{ReverbClient, EventHandler};
+use async_trait::async_trait;
+use cursive::reexports::enumset::__internal::EnumSetTypeRepr;
 use crate::models::{Config, WebsocketPrintJob};
 use crate::services::print_job::handle_print_job;
 
@@ -11,6 +15,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
     loop {
         let app_key;
         let app_secret;
+        let auth_endpoint;
         let cluster;
         let use_tls;
         let config_clone;
@@ -20,7 +25,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
             let config_guard = config.lock().unwrap();
             app_key = config_guard.reverb_app_key.clone();
             app_secret = config_guard.reverb_app_secret.clone();
-            // Extract cluster from host or use default
+            auth_endpoint = config_guard.reverb_auth_endpoint.clone();
             cluster = config_guard
                 .reverb_host
                 .clone()
@@ -30,46 +35,31 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
             config_clone = config_guard.clone();
         }
 
-        println!("Initializing Pusher client with app key: {}", app_key);
+        println!("Initializing Reverb client with app key: {}", app_key);
 
-        // Create Pusher client configuration
-        let pusher_config = pusher_rs::PusherConfig {
-            app_key,
-            app_secret,
-            cluster,
-            use_tls,
-            host,
-            max_reconnection_attempts: 5,
-            ..Default::default()
-        };
+        let reverb_client = ReverbClient::new(
+            app_key.as_str(),
+            app_secret.as_str(),
+            auth_endpoint.as_str(),
+            host.unwrap().as_str(),
+            use_tls
+        );
 
-        // Create Pusher client
-        let mut pusher = match pusher_rs::PusherClient::new(pusher_config) {
-            Ok(client) => client,
+        match reverb_client.connect().await {
+            Ok(_) => println!("Connected to Reverb successfully"),
             Err(e) => {
-                eprintln!("Failed to create Pusher client: {:?}", e);
-                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-                continue;
-            }
-        };
-
-        match pusher.connect().await {
-            Ok(_) => println!("Connected to Pusher successfully"),
-            Err(e) => {
-                eprintln!("Failed to connect to Pusher: {:?}", e);
+                eprintln!("Failed to connect to Reverb: {:?}", e);
                 tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
                 continue;
             }
         }
 
-        println!("Pusher client initialized, subscribing to print jobs channel");
+        // Subscribe to the channel
+        let channel_name = "FluxErp.Models.PrintJobs";
+        let channel = private_channel(channel_name);
 
-        // Subscribe to the print jobs channel
-        let channel_name = "private-FluxErp.Models.PrintJobs";
-
-        // Subscribe to the channel (using the corrected method signature)
-        match pusher.subscribe(channel_name).await {
-            Ok(_) => println!("Successfully subscribed to channel: {}", channel_name),
+        match reverb_client.subscribe(channel).await {
+            Ok(_) => println!("Subscribed to channel: private-{}", channel_name),
             Err(e) => {
                 eprintln!("Failed to subscribe to channel: {:?}", e);
                 tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
@@ -77,82 +67,72 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
             }
         }
 
-        println!(
-            "Subscribed to print jobs channel, setting up event handler for PrintJobCreated event"
-        );
+        // Create a handler to process events
+        struct PrintJobHandler {
+            http_client: Client,
+            config: Arc<Mutex<Config>>,
+        }
 
-        // Set up an event handler using a callback function for the specific event
-        let http_client_clone = http_client.clone();
-        let config_for_handler = config_clone.clone();
+        #[async_trait]
+        impl EventHandler for PrintJobHandler {
+            async fn on_connection_established(&self, socket_id: &str) {
+                println!("Connection established with socket id: {}", socket_id);
+            }
 
-        // The bind method requires a callback function instead of returning a stream
-        let connection_result = pusher
-            .bind("PrintJobCreated", move |event| {
-                println!("Received print job event: {:?}", event);
+            async fn on_channel_subscription_succeeded(&self, channel: &str) {
+                println!("Successfully subscribed to channel: {}", channel);
+            }
 
-                // The data field is of type Value (likely serde_json::Value)
-                let data = event.data;
+            async fn on_channel_event(&self, channel: &str, event: &str, data: &str) {
+                if event == "PrintJobCreated" {
+                    println!("Received print job event on channel {}: {}", channel, data);
 
-                // Convert the Value to a string for parsing
-                match serde_json::to_string(&data) {
-                    Ok(event_data) => {
-                        println!("Event data as string: {}", event_data);
+                    // Parse the print job data
+                    match serde_json::from_str::<WebsocketPrintJob>(data) {
+                        Ok(print_job) => {
+                            // Get references needed to handle the job
+                            let client_clone = self.http_client.clone();
+                            let config_clone = self.config.clone();
 
-                        // Parse the print job data
-                        match serde_json::from_str::<WebsocketPrintJob>(&event_data) {
-                            Ok(print_job) => {
-                                // Handle the print job
-                                let client_clone = http_client_clone.clone();
-                                let config_ref = config_for_handler.clone();
+                            // Spawn a new task to handle the print job
+                            tokio::spawn(async move {
+                                // Get a direct reference to Config
+                                let config_ref = {
+                                    let guard = config_clone.lock().unwrap();
+                                    guard.clone()
+                                };
 
-                                // Spawn a new task to handle the print job
-                                tokio::spawn(async move {
-                                    if let Err(e) =
-                                        handle_print_job(print_job, &client_clone, &config_ref)
-                                            .await
-                                    {
-                                        eprintln!("Error handling WebSocket print job: {}", e);
-                                    }
-                                });
-                            }
-                            Err(e) => {
-                                eprintln!("Failed to parse print job data: {}", e);
-                                // Print the data to help with debugging
-                                println!("Raw data: {}", event_data);
-                            }
+                                if let Err(e) = handle_print_job(print_job, &client_clone, &config_ref).await {
+                                    eprintln!("Error handling print job: {}", e);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to parse print job data: {}", e);
+                            println!("Raw data: {}", data);
                         }
                     }
-                    Err(e) => {
-                        eprintln!("Failed to convert event data to string: {:?}", e);
-                    }
                 }
-            })
-            .await;
-
-        // Check if binding was successful
-        if let Err(e) = connection_result {
-            eprintln!("Failed to bind to event: {:?}", e);
-            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-            continue;
-        }
-
-        println!("Bound to PrintJobCreated event, waiting for events");
-
-        // Since pusher_rs handles events through callbacks, we need to keep the connection alive
-        // The simplest way is to just wait indefinitely or until an error occurs
-        match pusher.connect().await {
-            Ok(_) => {
-                println!("Connected to Pusher successfully");
-                // Wait for disconnection
-                tokio::time::sleep(tokio::time::Duration::from_secs(u64::MAX)).await;
             }
-            Err(e) => {
-                eprintln!("Failed to connect to Pusher: {:?}", e);
+
+            async fn on_error(&self, code: u32, message: &str) {
+                eprintln!("Reverb error: {} (code: {})", message, code);
             }
         }
 
-        // If we reach here, the connection was closed or failed, wait before reconnecting
-        println!("Connection lost, reconnecting in 30 seconds...");
-        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+        // Register the handler
+        let handler = PrintJobHandler {
+            http_client: http_client.clone(),
+            config: config.clone(),
+        };
+
+        reverb_client.add_event_handler(handler).await;
+        println!("Event handler registered, listening for events");
+
+        // Keep waiting for a long time - the handler will process events as they arrive
+        tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+
+        // If we reach here, we'll try to reconnect
+        println!("Reconnecting to Reverb server...");
     }
 }

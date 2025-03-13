@@ -7,6 +7,7 @@ use actix_web::{web, App, HttpServer};
 use clap::{Parser, Subcommand};
 use local_ip_address::local_ip;
 use reqwest::Client;
+use tracing_subscriber::EnvFilter;
 
 mod api;
 mod config;
@@ -40,6 +41,13 @@ enum Commands {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::from_default_env()
+                .add_directive("reverb_rs=debug".parse().unwrap())
+                .add_directive("rust_spooler=debug".parse().unwrap())
+        )
+        .init();
     // Parse command line arguments
     let cli = Cli::parse();
 

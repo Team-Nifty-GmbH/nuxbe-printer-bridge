@@ -167,11 +167,19 @@ fn create_reverb_settings(config: &Config) -> impl View {
     );
 
     // Add the host field
-    layout.add_child(TextView::new("Reverb Host (optional):"));
+    layout.add_child(TextView::new("Reverb Host"));
     layout.add_child(
         EditView::new()
             .content(config.reverb_host.clone().unwrap_or_default())
             .with_name("reverb_host")
+    );
+
+    // Add the host field
+    layout.add_child(TextView::new("Reverb Auth Endpoint"));
+    layout.add_child(
+        EditView::new()
+            .content(config.reverb_auth_endpoint.clone())
+            .with_name("reverb_auth_endpoint")
     );
 
     PaddedView::new(
@@ -242,6 +250,10 @@ fn save_config_from_ui(s: &mut Cursive, config: Arc<Mutex<Config>>) {
     } else {
         Some(reverb_host)
     };
+
+    config_guard.reverb_auth_endpoint = s.call_on_name("reverb_auth_endpoint", |view: &mut EditView| {
+        view.get_content().to_string()
+    }).unwrap_or_default();
 
     // Save the updated configuration
     save_config(&config_guard);
