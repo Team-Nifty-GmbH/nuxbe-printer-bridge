@@ -6,7 +6,6 @@ use tokio;
 use serde_json;
 use reverb_rs::{ReverbClient, EventHandler};
 use async_trait::async_trait;
-use cursive::reexports::enumset::__internal::EnumSetTypeRepr;
 use crate::models::{Config, WebsocketPrintJob};
 use crate::services::print_job::handle_print_job;
 
@@ -16,58 +15,32 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
         let app_key;
         let app_secret;
         let auth_endpoint;
-        let cluster;
+        let host;
         let use_tls;
         let config_clone;
-        let host;
 
         {
             let config_guard = config.lock().unwrap();
             app_key = config_guard.reverb_app_key.clone();
             app_secret = config_guard.reverb_app_secret.clone();
             auth_endpoint = config_guard.reverb_auth_endpoint.clone();
-            cluster = config_guard
-                .reverb_host
-                .clone()
-                .unwrap_or_else(|| "mt1".to_string());
+            host = config_guard.reverb_host.clone().unwrap_or_else(|| "mt1".to_string());
             use_tls = config_guard.reverb_use_tls;
-            host = config_guard.reverb_host.clone();
             config_clone = config_guard.clone();
         }
 
         println!("Initializing Reverb client with app key: {}", app_key);
 
+        // Create the Reverb client
         let reverb_client = ReverbClient::new(
             app_key.as_str(),
             app_secret.as_str(),
             auth_endpoint.as_str(),
-            host.unwrap().as_str(),
+            &host,
             use_tls
         );
 
-        match reverb_client.connect().await {
-            Ok(_) => println!("Connected to Reverb successfully"),
-            Err(e) => {
-                eprintln!("Failed to connect to Reverb: {:?}", e);
-                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-                continue;
-            }
-        }
-
-        // Subscribe to the channel
-        let channel_name = "FluxErp.Models.PrintJobs";
-        let channel = private_channel(channel_name);
-
-        match reverb_client.subscribe(channel).await {
-            Ok(_) => println!("Subscribed to channel: private-{}", channel_name),
-            Err(e) => {
-                eprintln!("Failed to subscribe to channel: {:?}", e);
-                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-                continue;
-            }
-        }
-
-        // Create a handler to process events
+        // Create a handler for WebSocket events
         struct PrintJobHandler {
             http_client: Client,
             config: Arc<Mutex<Config>>,
@@ -126,13 +99,45 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
             config: config.clone(),
         };
 
+        // Register the handler before establishing connection
         reverb_client.add_event_handler(handler).await;
-        println!("Event handler registered, listening for events");
 
-        // Keep waiting for a long time - the handler will process events as they arrive
-        tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+        // Establish the connection
+        match reverb_client.connect().await {
+            Ok(_) => {
+                println!("Connected to Reverb successfully");
 
-        // If we reach here, we'll try to reconnect
+                // After successful connection, wait a bit
+                // to ensure the connection is fully established
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                // Subscribe to the channel
+                let channel_name = "FluxErp.Models.PrintJobs";
+                let channel = private_channel(channel_name);
+
+                // Try to subscribe to the channel
+                match reverb_client.subscribe(channel).await {
+                    Ok(_) => {
+                        println!("Subscribed to channel: private-{}", channel_name);
+
+                        // Wait for events for a longer period
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                    },
+                    Err(e) => {
+                        eprintln!("Failed to subscribe to channel: {:?}", e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+                }
+            },
+            Err(e) => {
+                eprintln!("Failed to connect to Reverb: {:?}", e);
+                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                continue;
+            }
+        }
+
+        // If we reach this point, attempt to reconnect
         println!("Reconnecting to Reverb server...");
     }
 }
