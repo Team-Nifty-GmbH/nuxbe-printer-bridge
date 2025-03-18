@@ -1,15 +1,15 @@
-use reverb_rs::private_channel;
-use std::fmt::Debug;
-use std::sync::{Arc, Mutex};
-use reqwest::Client;
-use tokio;
-use serde_json;
-use reverb_rs::{ReverbClient, EventHandler};
-use async_trait::async_trait;
 use crate::models::{Config, WebsocketPrintJob};
 use crate::services::print_job::handle_print_job;
+use async_trait::async_trait;
+use reqwest::Client;
+use reverb_rs::private_channel;
+use reverb_rs::{EventHandler, ReverbClient};
+use serde_json;
+use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio;
 
 pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
     // Flag to track connection status
@@ -43,7 +43,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
                 app_secret.as_str(),
                 auth_endpoint.as_str(),
                 host.unwrap().as_str(),
-                use_tls
+                use_tls,
             );
 
             // Add a delay before trying to connect
@@ -60,7 +60,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
 
                     // Only set connected state after ensuring the connection is stable
                     is_connected.store(true, Ordering::Relaxed);
-                },
+                }
                 Err(e) => {
                     eprintln!("Failed to connect to Reverb: {:?}", e);
                     is_connected.store(false, Ordering::Relaxed);
@@ -126,7 +126,10 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
                                             guard.clone()
                                         };
 
-                                        if let Err(e) = handle_print_job(print_job, &client_clone, &config_ref).await {
+                                        if let Err(e) =
+                                            handle_print_job(print_job, &client_clone, &config_ref)
+                                                .await
+                                        {
                                             eprintln!("Error handling print job: {}", e);
                                         }
                                     });
