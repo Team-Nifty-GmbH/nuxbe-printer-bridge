@@ -160,8 +160,6 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
 
                 client.add_event_handler(handler).await;
                 println!("Event handler registered, listening for events");
-                
-                // Instead of a separate task, we'll check the connection in the main loop
             }
         }
 
