@@ -5,12 +5,21 @@ use reqwest::Client;
 use reverb_rs::private_channel;
 use reverb_rs::{EventHandler, ReverbClient};
 use serde_json;
-use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio;
 
 pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
+    let disabled = {
+        let guard = config.lock().unwrap();
+        guard.reverb_disabled
+    };
+
+    if disabled {
+        println!("WebSocket functionality is disabled. Not connecting to Reverb.");
+        return;
+    }
+    
     loop {
         let app_key;
         let app_secret;
