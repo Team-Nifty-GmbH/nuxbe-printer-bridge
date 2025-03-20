@@ -6,10 +6,12 @@ pub struct Config {
     pub instance_name: String,        // Name for this printer server instance
     pub printer_check_interval: u64,  // in minutes
     pub job_check_interval: u64,      // in minutes
-    pub host_url: String,             // Base URL for all API endpoints
-    pub notification_token: String,   // Authentication token for notifications
-    pub print_jobs_token: String,     // Authentication token for print jobs
-    pub api_port: u16,                // API port
+    pub flux_url: String,             // Base URL for all API endpoints
+    pub flux_interface_user_name: String,   // Authentication token for notifications
+    pub flux_interface_user_password: String,     // Authentication token for print jobs
+    pub flux_api_token: Option<String>,    // Authentication token for print jobs
+    pub api_port: u16,
+    pub reverb_disabled: bool,
     pub reverb_app_id: String,
     pub reverb_app_key: String,
     pub reverb_app_secret: String,
@@ -24,10 +26,12 @@ impl Default for Config {
             instance_name: "default-instance".to_string(),
             printer_check_interval: 5,
             job_check_interval: 2,
-            host_url: "http://example.com".to_string(),
-            notification_token: "default-token".to_string(),
-            print_jobs_token: "default-token".to_string(),
+            flux_url: "http://example.com".to_string(),
+            flux_interface_user_name: "spooler".to_string(),
+            flux_interface_user_password: "strong-password".to_string(),
+            flux_api_token: None,
             api_port: 8080,
+            reverb_disabled: false,
             reverb_app_id: "default-app-id".to_string(),
             reverb_app_key: "default-app-key".to_string(),
             reverb_app_secret: "default-app-secret".to_string(),

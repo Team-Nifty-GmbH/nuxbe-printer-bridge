@@ -44,16 +44,18 @@ fn create_config_dialog(siv: &mut Cursive, config: Arc<Mutex<Config>>) {
                     .child(api_settings)
                     .child(reverb_settings)
                     .child(
-                        TextView::new("Changes will be applied after saving and restarting the server.")
-                            .h_align(HAlign::Center)
-                    )
+                        TextView::new(
+                            "Changes will be applied after saving and restarting the server.",
+                        )
+                        .h_align(HAlign::Center),
+                    ),
             )
             .button("Save", move |s| {
                 save_config_from_ui(s, Arc::clone(&config));
             })
             .button("Cancel", |s| {
                 s.quit();
-            })
+            }),
     );
 }
 
@@ -67,16 +69,16 @@ fn create_server_settings(config: &Config) -> impl View {
                 .child(
                     EditView::new()
                         .content(config.instance_name.clone())
-                        .with_name("instance_name")
+                        .with_name("instance_name"),
                 )
                 .child(TextView::new("API Port:"))
                 .child(
                     EditView::new()
                         .content(config.api_port.to_string())
-                        .with_name("api_port")
-                )
+                        .with_name("api_port"),
+                ),
         )
-            .title("Server Settings")
+        .title("Server Settings"),
     )
 }
 
@@ -90,16 +92,16 @@ fn create_interval_settings(config: &Config) -> impl View {
                 .child(
                     EditView::new()
                         .content(config.printer_check_interval.to_string())
-                        .with_name("printer_check_interval")
+                        .with_name("printer_check_interval"),
                 )
                 .child(TextView::new("Job Check Interval (minutes):"))
                 .child(
                     EditView::new()
                         .content(config.job_check_interval.to_string())
-                        .with_name("job_check_interval")
-                )
+                        .with_name("job_check_interval"),
+                ),
         )
-            .title("Polling Intervals")
+        .title("Polling Intervals"),
     )
 }
 
@@ -109,50 +111,57 @@ fn create_api_settings(config: &Config) -> impl View {
         Margins::lrtb(1, 1, 0, 1),
         Dialog::around(
             LinearLayout::vertical()
-                .child(TextView::new("Host URL:"))
+                .child(TextView::new("Flux Url:"))
                 .child(
                     EditView::new()
-                        .content(config.host_url.clone())
-                        .with_name("host_url")
+                        .content(config.flux_url.clone())
+                        .with_name("flux_url"),
                 )
-                .child(TextView::new("Notification Token:"))
+                .child(TextView::new("Interface User Name:"))
                 .child(
                     EditView::new()
-                        .content(config.notification_token.clone())
-                        .with_name("notification_token")
+                        .content(config.flux_interface_user_name.clone())
+                        .with_name("flux_interface_user_name"),
                 )
-                .child(TextView::new("Print Jobs Token:"))
+                .child(TextView::new("Interface User Password:"))
                 .child(
                     EditView::new()
-                        .content(config.print_jobs_token.clone())
-                        .with_name("print_jobs_token")
-                )
+                        .content(config.flux_interface_user_password.clone())
+                        .with_name("flux_interface_user_password"),
+                ),
         )
-            .title("API Integration")
+        .title("API Integration"),
     )
 }
 
 /// Create WebSocket settings section
 fn create_reverb_settings(config: &Config) -> impl View {
+    let reverb_disabled = Checkbox::new()
+        .with_checked(config.reverb_disabled)
+        .with_name("reverb_disabled");
+    
     // Create a layout for the Reverb settings
     let mut layout = LinearLayout::vertical()
+        .child(LinearLayout::horizontal()
+                   .child(reverb_disabled)
+                   .child(TextView::new("Disable Websockets: ")),)
         .child(TextView::new("Reverb App ID:"))
         .child(
             EditView::new()
                 .content(config.reverb_app_id.clone())
-                .with_name("reverb_app_id")
+                .with_name("reverb_app_id"),
         )
         .child(TextView::new("Reverb App Key:"))
         .child(
             EditView::new()
                 .content(config.reverb_app_key.clone())
-                .with_name("reverb_app_key")
+                .with_name("reverb_app_key"),
         )
         .child(TextView::new("Reverb App Secret:"))
         .child(
             EditView::new()
                 .content(config.reverb_app_secret.clone())
-                .with_name("reverb_app_secret")
+                .with_name("reverb_app_secret"),
         );
 
     // Add the TLS checkbox
@@ -163,7 +172,7 @@ fn create_reverb_settings(config: &Config) -> impl View {
     layout.add_child(
         LinearLayout::horizontal()
             .child(use_tls)
-            .child(TextView::new(" Use TLS for Reverb Connection"))
+            .child(TextView::new(" Use TLS for Reverb Connection")),
     );
 
     // Add the host field
@@ -171,7 +180,7 @@ fn create_reverb_settings(config: &Config) -> impl View {
     layout.add_child(
         EditView::new()
             .content(config.reverb_host.clone().unwrap_or_default())
-            .with_name("reverb_host")
+            .with_name("reverb_host"),
     );
 
     // Add the host field
@@ -179,12 +188,12 @@ fn create_reverb_settings(config: &Config) -> impl View {
     layout.add_child(
         EditView::new()
             .content(config.reverb_auth_endpoint.clone())
-            .with_name("reverb_auth_endpoint")
+            .with_name("reverb_auth_endpoint"),
     );
 
     PaddedView::new(
         Margins::lrtb(1, 1, 0, 1),
-        Dialog::around(layout).title("Laravel Reverb WebSocket Settings")
+        Dialog::around(layout).title("Laravel Reverb WebSocket Settings"),
     )
 }
 
@@ -194,56 +203,82 @@ fn save_config_from_ui(s: &mut Cursive, config: Arc<Mutex<Config>>) {
     let mut config_guard = config.lock().unwrap();
 
     // Update server settings
-    config_guard.instance_name = s.call_on_name("instance_name", |view: &mut EditView| {
-        view.get_content().to_string()
-    }).unwrap_or_default();
+    config_guard.instance_name = s
+        .call_on_name("instance_name", |view: &mut EditView| {
+            view.get_content().to_string()
+        })
+        .unwrap_or_default();
 
-    config_guard.api_port = s.call_on_name("api_port", |view: &mut EditView| {
-        view.get_content().parse::<u16>().unwrap_or(8080)
-    }).unwrap_or(8080);
+    config_guard.api_port = s
+        .call_on_name("api_port", |view: &mut EditView| {
+            view.get_content().parse::<u16>().unwrap_or(8080)
+        })
+        .unwrap_or(8080);
 
     // Update interval settings
-    config_guard.printer_check_interval = s.call_on_name("printer_check_interval", |view: &mut EditView| {
-        view.get_content().parse::<u64>().unwrap_or(5)
-    }).unwrap_or(5);
+    config_guard.printer_check_interval = s
+        .call_on_name("printer_check_interval", |view: &mut EditView| {
+            view.get_content().parse::<u64>().unwrap_or(5)
+        })
+        .unwrap_or(5);
 
-    config_guard.job_check_interval = s.call_on_name("job_check_interval", |view: &mut EditView| {
-        view.get_content().parse::<u64>().unwrap_or(2)
-    }).unwrap_or(2);
+    config_guard.job_check_interval = s
+        .call_on_name("job_check_interval", |view: &mut EditView| {
+            view.get_content().parse::<u64>().unwrap_or(2)
+        })
+        .unwrap_or(2);
 
     // Update API settings
-    config_guard.host_url = s.call_on_name("host_url", |view: &mut EditView| {
-        view.get_content().to_string()
-    }).unwrap_or_default();
+    config_guard.flux_url = s
+        .call_on_name("flux_url", |view: &mut EditView| {
+            view.get_content().to_string()
+        })
+        .unwrap_or_default();
 
-    config_guard.notification_token = s.call_on_name("notification_token", |view: &mut EditView| {
-        view.get_content().to_string()
-    }).unwrap_or_default();
+    config_guard.flux_interface_user_name = s
+        .call_on_name("flux_interface_user_name", |view: &mut EditView| {
+            view.get_content().to_string()
+        })
+        .unwrap_or_default();
 
-    config_guard.print_jobs_token = s.call_on_name("print_jobs_token", |view: &mut EditView| {
-        view.get_content().to_string()
-    }).unwrap_or_default();
+    config_guard.flux_interface_user_password = s
+        .call_on_name("flux_interface_user_password", |view: &mut EditView| {
+            view.get_content().to_string()
+        })
+        .unwrap_or_default();
 
+    config_guard.reverb_disabled = s
+        .call_on_name("reverb_disabled", |view: &mut Checkbox| view.is_checked())
+        .unwrap_or(false);
+    
     // Update WebSocket settings
-    config_guard.reverb_app_id = s.call_on_name("reverb_app_id", |view: &mut EditView| {
-        view.get_content().to_string()
-    }).unwrap_or_default();
+    config_guard.reverb_app_id = s
+        .call_on_name("reverb_app_id", |view: &mut EditView| {
+            view.get_content().to_string()
+        })
+        .unwrap_or_default();
 
-    config_guard.reverb_app_key = s.call_on_name("reverb_app_key", |view: &mut EditView| {
-        view.get_content().to_string()
-    }).unwrap_or_default();
+    config_guard.reverb_app_key = s
+        .call_on_name("reverb_app_key", |view: &mut EditView| {
+            view.get_content().to_string()
+        })
+        .unwrap_or_default();
 
-    config_guard.reverb_app_secret = s.call_on_name("reverb_app_secret", |view: &mut EditView| {
-        view.get_content().to_string()
-    }).unwrap_or_default();
+    config_guard.reverb_app_secret = s
+        .call_on_name("reverb_app_secret", |view: &mut EditView| {
+            view.get_content().to_string()
+        })
+        .unwrap_or_default();
 
-    config_guard.reverb_use_tls = s.call_on_name("reverb_use_tls", |view: &mut Checkbox| {
-        view.is_checked()
-    }).unwrap_or(true);
+    config_guard.reverb_use_tls = s
+        .call_on_name("reverb_use_tls", |view: &mut Checkbox| view.is_checked())
+        .unwrap_or(true);
 
-    let reverb_host = s.call_on_name("reverb_host", |view: &mut EditView| {
-        view.get_content().to_string()
-    }).unwrap_or_default();
+    let reverb_host = s
+        .call_on_name("reverb_host", |view: &mut EditView| {
+            view.get_content().to_string()
+        })
+        .unwrap_or_default();
 
     config_guard.reverb_host = if reverb_host.is_empty() {
         None
@@ -251,9 +286,11 @@ fn save_config_from_ui(s: &mut Cursive, config: Arc<Mutex<Config>>) {
         Some(reverb_host)
     };
 
-    config_guard.reverb_auth_endpoint = s.call_on_name("reverb_auth_endpoint", |view: &mut EditView| {
-        view.get_content().to_string()
-    }).unwrap_or_default();
+    config_guard.reverb_auth_endpoint = s
+        .call_on_name("reverb_auth_endpoint", |view: &mut EditView| {
+            view.get_content().to_string()
+        })
+        .unwrap_or_default();
 
     // Save the updated configuration
     save_config(&config_guard);
@@ -265,6 +302,6 @@ fn save_config_from_ui(s: &mut Cursive, config: Arc<Mutex<Config>>) {
             .button("OK", |s| {
                 s.pop_layer();
                 s.quit();
-            })
+            }),
     );
 }

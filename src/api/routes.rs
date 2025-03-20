@@ -87,9 +87,20 @@ pub async fn check_jobs_endpoint(
     config: web::Data<Arc<Mutex<Config>>>,
     http_client: web::Data<Client>,
 ) -> impl Responder {
-    let config_guard = config.lock().unwrap();
-    match fetch_print_jobs(&http_client, &config_guard).await {
-        Ok(jobs) => HttpResponse::Ok().json(jobs),
+    // Clone the config to avoid holding the MutexGuard across await
+    let mut config_clone = {
+        let guard = config.lock().unwrap();
+        guard.clone()
+    };
+
+    match fetch_print_jobs(&http_client, &mut config_clone).await {
+        Ok(jobs) => {
+            // Save any changes to the token back to the shared config
+            if let Ok(mut guard) = config.lock() {
+                guard.flux_api_token = config_clone.flux_api_token;
+            }
+            HttpResponse::Ok().json(jobs)
+        },
         Err(e) => HttpResponse::InternalServerError().body(format!("Failed to check jobs: {}", e)),
     }
 }

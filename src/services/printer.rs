@@ -243,19 +243,19 @@ pub async fn check_for_new_printers(
     // Notify about new printers
     if !new_printers.is_empty() {
         // Get what we need from config before to await
-        let host_url;
-        let notification_token;
+        let flux_url;
+        let flux_api_token;
         let instance_name;
 
         {
             let config_guard = config.lock().unwrap();
-            host_url = config_guard.host_url.clone();
-            notification_token = config_guard.notification_token.clone();
+            flux_url = config_guard.flux_url.clone();
+            flux_api_token = config_guard.flux_api_token.clone();
             instance_name = config_guard.instance_name.clone();
         }
 
         // Construct the notification URL using the host
-        let notification_url = format!("{}/api/printer-notification", host_url);
+        let notification_url = format!("{}/api/printer-notification", flux_url);
 
         for printer in &new_printers {
             let notification = PrinterNotification {
@@ -265,7 +265,7 @@ pub async fn check_for_new_printers(
 
             let res = http_client
                 .post(&notification_url)
-                .header("Authorization", format!("Bearer {}", notification_token))
+                .header("Authorization", format!("Bearer {}", flux_api_token.clone().unwrap_or_default()))
                 .header("X-Instance-Name", instance_name.clone())
                 .json(&notification)
                 .send()
@@ -313,4 +313,45 @@ pub async fn printer_checker_task(
 
         time::sleep(Duration::from_secs(interval * 60)).await;
     }
+}
+
+pub async fn ensure_authenticated(
+    http_client: &Client,
+    config: &mut Config
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Only authenticate if we don't have a token
+    if config.flux_api_token.is_none() {
+        println!("No API token found, authenticating...");
+
+        let auth_url = format!("{}/api/auth/token", config.flux_url);
+
+        let auth_data = serde_json::json!({
+            "email": config.flux_interface_user_name,
+            "password": config.flux_interface_user_password
+        });
+
+        let response = http_client
+            .post(&auth_url)
+            .json(&auth_data)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(format!("Authentication failed: {}", response.status()).into());
+        }
+
+        let auth_response: serde_json::Value = response.json().await?;
+
+        if let Some(token) = auth_response.get("token").and_then(|t| t.as_str()) {
+            println!("Successfully authenticated and got token");
+            config.flux_api_token = Some(token.to_string());
+
+            // Save the updated config to persist the token
+            crate::config::save_config(config);
+        } else {
+            return Err("Authentication response didn't contain a token".into());
+        }
+    }
+
+    Ok(())
 }

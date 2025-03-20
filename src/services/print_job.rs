@@ -8,12 +8,13 @@ use tempfile::NamedTempFile;
 use tokio::time;
 
 use crate::models::{Config, PrintJob, WebsocketPrintJob};
+use crate::services::printer;
 
 /// Process a print job received through WebSocket
 pub async fn handle_print_job(
     print_job: WebsocketPrintJob,
     http_client: &Client,
-    config: &Config,
+    config: &mut Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "Processing WebSocket print job for printer: {} from server: {} with media id: {}",
@@ -28,11 +29,11 @@ pub async fn handle_print_job(
         );
         return Ok(());
     }
-
+    printer::ensure_authenticated(http_client, config).await?;
     // Construct the URL to get the file
     let file_url = format!(
         "{}/api/media/{}/download",
-        config.host_url, print_job.media_id
+        config.flux_url, print_job.media_id
     );
 
     // Download the file
@@ -40,7 +41,7 @@ pub async fn handle_print_job(
         .get(&file_url)
         .header(
             "Authorization",
-            format!("Bearer {}", config.print_jobs_token),
+            format!("Bearer {}", config.flux_api_token.as_ref().unwrap()),
         )
         .send()
         .await?;
@@ -51,7 +52,7 @@ pub async fn handle_print_job(
             print_job.media_id,
             file_response.status()
         )
-            .into());
+        .into());
     }
 
     let file_content = file_response.bytes().await?;
@@ -86,7 +87,7 @@ pub async fn handle_print_job(
             "Failed to print: {}",
             String::from_utf8_lossy(&output.stderr)
         )
-            .into());
+        .into());
     }
 
     Ok(())
@@ -95,16 +96,21 @@ pub async fn handle_print_job(
 /// Fetch print jobs from the API and process them
 pub async fn fetch_print_jobs(
     http_client: &Client,
-    config: &Config,
+    config: &mut Config,
 ) -> Result<Vec<PrintJob>, Box<dyn std::error::Error>> {
+    printer::ensure_authenticated(http_client, config).await?;
+    
     // Construct the URL for fetching print jobs
-    let jobs_url = format!("{}/api/print-jobs", config.host_url);
+    let jobs_url = format!("{}/api/print-jobs", config.flux_url);
 
     let response = http_client
         .get(&jobs_url)
         .header(
             "Authorization",
-            format!("Bearer {}", config.print_jobs_token),
+            format!(
+                "Bearer {}",
+                config.flux_api_token.as_ref().unwrap()
+            ),
         )
         .header("X-Instance-Name", &config.instance_name)
         .send()
@@ -169,20 +175,25 @@ pub async fn fetch_print_jobs(
 /// Background task to periodically check for print jobs
 pub async fn job_checker_task(config: Arc<Mutex<Config>>, http_client: Client) {
     loop {
-        // Get interval and clone config outside of the await
+        // Get interval and create a mutable config clone
         let interval;
-        let config_clone;
+        let mut config_clone;
 
         {
-            let config_guard = config.lock().unwrap();
-            interval = config_guard.job_check_interval;
-            config_clone = config_guard.clone();
+            let guard = config.lock().unwrap();
+            interval = guard.job_check_interval;
+            config_clone = guard.clone();
         }
 
-        match fetch_print_jobs(&http_client, &config_clone).await {
+        match fetch_print_jobs(&http_client, &mut config_clone).await {
             Ok(jobs) => {
                 if !jobs.is_empty() {
                     println!("Processed {} print job(s)", jobs.len());
+                }
+
+                // Save any token changes back to the shared config
+                if let Ok(mut guard) = config.lock() {
+                    guard.flux_api_token = config_clone.flux_api_token;
                 }
             }
             Err(e) => eprintln!("Error fetching print jobs: {}", e),
