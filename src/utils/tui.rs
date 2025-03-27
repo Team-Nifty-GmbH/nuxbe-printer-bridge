@@ -117,17 +117,12 @@ fn create_api_settings(config: &Config) -> impl View {
                         .content(config.flux_url.clone())
                         .with_name("flux_url"),
                 )
-                .child(TextView::new("Interface User Name:"))
+             
+                .child(TextView::new("Flux Api Token:"))
                 .child(
                     EditView::new()
-                        .content(config.flux_interface_user_name.clone())
-                        .with_name("flux_interface_user_name"),
-                )
-                .child(TextView::new("Interface User Password:"))
-                .child(
-                    EditView::new()
-                        .content(config.flux_interface_user_password.clone())
-                        .with_name("flux_interface_user_password"),
+                        .content(config.flux_api_token.clone().unwrap())
+                        .with_name("flux_api_token"),
                 ),
         )
         .title("API Integration"),
@@ -235,17 +230,11 @@ fn save_config_from_ui(s: &mut Cursive, config: Arc<Mutex<Config>>) {
         })
         .unwrap_or_default();
 
-    config_guard.flux_interface_user_name = s
-        .call_on_name("flux_interface_user_name", |view: &mut EditView| {
+    config_guard.flux_api_token = Option::from(s
+        .call_on_name("flux_api_token", |view: &mut EditView| {
             view.get_content().to_string()
         })
-        .unwrap_or_default();
-
-    config_guard.flux_interface_user_password = s
-        .call_on_name("flux_interface_user_password", |view: &mut EditView| {
-            view.get_content().to_string()
-        })
-        .unwrap_or_default();
+        .unwrap_or_default());
 
     config_guard.reverb_disabled = s
         .call_on_name("reverb_disabled", |view: &mut Checkbox| view.is_checked())

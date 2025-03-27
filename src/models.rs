@@ -7,8 +7,6 @@ pub struct Config {
     pub printer_check_interval: u64,  // in minutes
     pub job_check_interval: u64,      // in minutes
     pub flux_url: String,             // Base URL for all API endpoints
-    pub flux_interface_user_name: String,   // Authentication token for notifications
-    pub flux_interface_user_password: String,     // Authentication token for print jobs
     pub flux_api_token: Option<String>,    // Authentication token for print jobs
     pub api_port: u16,
     pub reverb_disabled: bool,
@@ -27,8 +25,6 @@ impl Default for Config {
             printer_check_interval: 5,
             job_check_interval: 2,
             flux_url: "http://example.com".to_string(),
-            flux_interface_user_name: "spooler".to_string(),
-            flux_interface_user_password: "strong-password".to_string(),
             flux_api_token: None,
             api_port: 8080,
             reverb_disabled: false,
@@ -68,10 +64,44 @@ pub struct PrinterNotification {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct PrintJobResponse {
+    pub status: u16,
+    pub data: PrintJobPaginatedData,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PrintJobPaginatedData {
+    pub current_page: u32,
+    pub data: Vec<PrintJob>,
+    pub first_page_url: String,
+    pub from: u32,
+    pub last_page: u32,
+    pub last_page_url: String,
+    pub links: Vec<PageLink>,
+    pub next_page_url: Option<String>,
+    pub path: String,
+    pub per_page: u32,
+    pub prev_page_url: Option<String>,
+    pub to: u32,
+    pub total: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PageLink {
+    pub url: Option<String>,
+    pub label: String,
+    pub active: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct PrintJob {
-    pub id: String,
-    pub printer: String,
-    pub file_url: String,
+    pub id: u32,
+    pub media_id: u32,
+    pub printer_id: u32,
+    pub user_id: Option<u32>,
+    pub quantity: u32,
+    pub size: String,
+    pub is_completed: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

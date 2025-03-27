@@ -280,6 +280,8 @@ pub async fn check_for_new_printers(
     Ok(new_printers)
 }
 
+
+
 /// Background task to periodically check for new printers
 pub async fn printer_checker_task(
     printers_data: Arc<Mutex<HashSet<String>>>,
@@ -304,6 +306,7 @@ pub async fn printer_checker_task(
                 if !new_printers.is_empty() {
                     println!("Found {} new printer(s)", new_printers.len());
                     for printer in new_printers {
+                        
                         println!("  - {}", printer.name);
                     }
                 }
@@ -313,45 +316,4 @@ pub async fn printer_checker_task(
 
         time::sleep(Duration::from_secs(interval * 60)).await;
     }
-}
-
-pub async fn ensure_authenticated(
-    http_client: &Client,
-    config: &mut Config
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Only authenticate if we don't have a token
-    if config.flux_api_token.is_none() {
-        println!("No API token found, authenticating...");
-
-        let auth_url = format!("{}/api/auth/token", config.flux_url);
-
-        let auth_data = serde_json::json!({
-            "email": config.flux_interface_user_name,
-            "password": config.flux_interface_user_password
-        });
-
-        let response = http_client
-            .post(&auth_url)
-            .json(&auth_data)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(format!("Authentication failed: {}", response.status()).into());
-        }
-
-        let auth_response: serde_json::Value = response.json().await?;
-
-        if let Some(token) = auth_response.get("token").and_then(|t| t.as_str()) {
-            println!("Successfully authenticated and got token");
-            config.flux_api_token = Some(token.to_string());
-
-            // Save the updated config to persist the token
-            crate::config::save_config(config);
-        } else {
-            return Err("Authentication response didn't contain a token".into());
-        }
-    }
-
-    Ok(())
 }

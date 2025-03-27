@@ -2,12 +2,12 @@ use std::io::Write;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
+use cursive::reexports::log::debug;
 use reqwest::Client;
 use tempfile::NamedTempFile;
 use tokio::time;
 
-use crate::models::{Config, PrintJob, WebsocketPrintJob};
+use crate::models::{Config, PrintJob, PrintJobResponse, WebsocketPrintJob};
 use crate::services::printer;
 
 /// Process a print job received through WebSocket
@@ -29,7 +29,7 @@ pub async fn handle_print_job(
         );
         return Ok(());
     }
-    printer::ensure_authenticated(http_client, config).await?;
+
     // Construct the URL to get the file
     let file_url = format!(
         "{}/api/media/{}/download",
@@ -98,21 +98,15 @@ pub async fn fetch_print_jobs(
     http_client: &Client,
     config: &mut Config,
 ) -> Result<Vec<PrintJob>, Box<dyn std::error::Error>> {
-    printer::ensure_authenticated(http_client, config).await?;
     
     // Construct the URL for fetching print jobs
     let jobs_url = format!("{}/api/print-jobs", config.flux_url);
 
     let response = http_client
         .get(&jobs_url)
-        .header(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                config.flux_api_token.as_ref().unwrap()
-            ),
-        )
+        .bearer_auth(config.flux_api_token.as_ref().unwrap())
         .header("X-Instance-Name", &config.instance_name)
+        .header("Accept", "application/json")
         .send()
         .await?;
 
@@ -120,17 +114,23 @@ pub async fn fetch_print_jobs(
         return Err(format!("Failed to fetch print jobs: {}", response.status()).into());
     }
 
-    let jobs: Vec<PrintJob> = response.json().await?;
+    let response_text = response.text().await?;
+    debug!("Response from API: {}", response_text);
 
+    let parsed_response: PrintJobResponse = serde_json::from_str(&response_text)?;
+    let jobs = parsed_response.data.data;
+    
     // Process each job
     for job in &jobs {
         println!(
             "Processing print job {} for printer {}",
-            job.id, job.printer
+            job.id, job.printer_id
         );
 
+        let file_url = format!("{}/api/media/{}/download", config.flux_url, job.media_id);
+        
         // Download the file
-        let file_response = http_client.get(&job.file_url).send().await?;
+        let file_response = http_client.get(file_url).send().await?;
         if !file_response.status().is_success() {
             eprintln!(
                 "Failed to download file for job {}: {}",
@@ -175,6 +175,16 @@ pub async fn fetch_print_jobs(
 /// Background task to periodically check for print jobs
 pub async fn job_checker_task(config: Arc<Mutex<Config>>, http_client: Client) {
     loop {
+        let disabled = {
+            let guard = config.lock().unwrap();
+            !guard.reverb_disabled
+        };
+
+        if disabled {
+            println!("Polling is disabled. Connecting to Reverb.");
+            return;
+        }
+
         // Get interval and create a mutable config clone
         let interval;
         let mut config_clone;
