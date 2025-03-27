@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -7,7 +7,9 @@ use actix_web::web;
 use reqwest::Client;
 use tokio::time;
 
-use crate::models::{Config, Printer, PrinterNotification};
+use crate::models::{Config, Printer};
+use crate::utils::printer_storage::{load_printers, save_printers};
+use crate::services::printer_sync::sync_printers_with_api;
 
 /// Get all available printers from the CUPS system
 pub async fn get_all_printers() -> Vec<Printer> {
@@ -117,6 +119,9 @@ pub async fn get_all_printers() -> Vec<Printer> {
 
     let mut printers = Vec::new();
 
+    // Load saved printers to preserve printer_id values
+    let saved_printers = load_printers();
+
     for name in final_printer_names {
         // Try to get media sizes
         let lpoptions_output = Command::new("lpoptions")
@@ -209,78 +214,88 @@ pub async fn get_all_printers() -> Vec<Printer> {
             }
         }
 
+        // Get printer_id from saved printers if available
+        let printer_id = saved_printers.get(&name).and_then(|p| p.printer_id);
+
         printers.push(Printer {
             name,
             description,
             location,
             make_and_model,
             media_sizes,
+            printer_id, // Include the printer_id field
         });
     }
 
     printers
 }
 
-/// Check for new printers and notify about them
+/// Check for new printers and update the stored printers
 pub async fn check_for_new_printers(
     printers_data: web::Data<Arc<Mutex<HashSet<String>>>>,
     http_client: web::Data<Client>,
     config: web::Data<Arc<Mutex<Config>>>,
 ) -> Result<Vec<Printer>, Box<dyn std::error::Error>> {
     let current_printers = get_all_printers().await;
-    let mut new_printers = Vec::new();
 
+    // Load the saved printers
+    let mut saved_printers = load_printers();
+
+    // Convert current printers list to hashmap
+    let mut current_printers_map: HashMap<String, Printer> = HashMap::new();
+    for printer in current_printers {
+        // If printer exists in saved_printers, preserve its printer_id
+        if let Some(saved_printer) = saved_printers.get(&printer.name) {
+            let mut updated_printer = printer.clone();
+            updated_printer.printer_id = saved_printer.printer_id;
+            current_printers_map.insert(printer.name.clone(), updated_printer);
+        } else {
+            current_printers_map.insert(printer.name.clone(), printer);
+        }
+    }
+
+    // Get the required configuration
+    let config_clone = {
+        let guard = config.lock().unwrap();
+        guard.clone()
+    };
+
+    // Sync with API
+    let sync_result = sync_printers_with_api(
+        &current_printers_map,
+        &http_client,
+        &config_clone
+    ).await;
+
+    let synced_printers = match sync_result {
+        Ok(printers) => printers,
+        Err(e) => {
+            eprintln!("Error syncing printers with API: {}", e);
+            current_printers_map
+        }
+    };
+
+    // Save the updated printers
+    save_printers(&synced_printers);
+
+    // Update the printers_data set with current printer names
     {
         let mut printers_set = printers_data.lock().unwrap();
-        for printer in &current_printers {
-            if !printers_set.contains(&printer.name) {
-                printers_set.insert(printer.name.clone());
-                new_printers.push(printer.clone());
-            }
+        printers_set.clear();
+        for printer in synced_printers.keys() {
+            printers_set.insert(printer.clone());
         }
     }
 
-    // Notify about new printers
-    if !new_printers.is_empty() {
-        // Get what we need from config before to await
-        let flux_url;
-        let flux_api_token;
-        let instance_name;
-
-        {
-            let config_guard = config.lock().unwrap();
-            flux_url = config_guard.flux_url.clone();
-            flux_api_token = config_guard.flux_api_token.clone();
-            instance_name = config_guard.instance_name.clone();
-        }
-
-        // Construct the notification URL using the host
-        let notification_url = format!("{}/api/printer-notification", flux_url);
-
-        for printer in &new_printers {
-            let notification = PrinterNotification {
-                action: "new_printer".to_string(),
-                printer: printer.clone(),
-            };
-
-            let res = http_client
-                .post(&notification_url)
-                .header("Authorization", format!("Bearer {}", flux_api_token.clone().unwrap_or_default()))
-                .header("X-Instance-Name", instance_name.clone())
-                .json(&notification)
-                .send()
-                .await?;
-
-            if !res.status().is_success() {
-                println!("Failed to notify about new printer: {}", res.status());
-            }
-        }
-    }
+    // Return new printers (those not in the old saved_printers)
+    let new_printers: Vec<Printer> = synced_printers
+        .values()
+        .filter(|p| !saved_printers.contains_key(&p.name))
+        .cloned()
+        .collect();
 
     Ok(new_printers)
 }
-
-
 
 /// Background task to periodically check for new printers
 pub async fn printer_checker_task(
@@ -306,7 +321,6 @@ pub async fn printer_checker_task(
                 if !new_printers.is_empty() {
                     println!("Found {} new printer(s)", new_printers.len());
                     for printer in new_printers {
-                        
                         println!("  - {}", printer.name);
                     }
                 }

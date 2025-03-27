@@ -8,7 +8,6 @@ use tempfile::NamedTempFile;
 use tokio::time;
 
 use crate::models::{Config, PrintJob, PrintJobResponse, WebsocketPrintJob};
-use crate::services::printer;
 
 /// Process a print job received through WebSocket
 pub async fn handle_print_job(
@@ -52,7 +51,7 @@ pub async fn handle_print_job(
             print_job.media_id,
             file_response.status()
         )
-        .into());
+            .into());
     }
 
     let file_content = file_response.bytes().await?;
@@ -87,7 +86,7 @@ pub async fn handle_print_job(
             "Failed to print: {}",
             String::from_utf8_lossy(&output.stderr)
         )
-        .into());
+            .into());
     }
 
     Ok(())
@@ -98,7 +97,7 @@ pub async fn fetch_print_jobs(
     http_client: &Client,
     config: &mut Config,
 ) -> Result<Vec<PrintJob>, Box<dyn std::error::Error>> {
-    
+
     // Construct the URL for fetching print jobs
     let jobs_url = format!("{}/api/print-jobs", config.flux_url);
 
@@ -119,16 +118,21 @@ pub async fn fetch_print_jobs(
 
     let parsed_response: PrintJobResponse = serde_json::from_str(&response_text)?;
     let jobs = parsed_response.data.data;
-    
+
     // Process each job
     for job in &jobs {
         println!(
-            "Processing print job {} for printer {}",
+            "Processing print job {} for printer ID {}",
             job.id, job.printer_id
         );
 
+        // Get printer name from printer_id
+        // In a real implementation, you would look up the printer name using the printer_id
+        // For now, we'll just use a placeholder method
+        let printer_name = get_printer_name_by_id(job.printer_id).await;
+
         let file_url = format!("{}/api/media/{}/download", config.flux_url, job.media_id);
-        
+
         // Download the file
         let file_response = http_client.get(file_url).send().await?;
         if !file_response.status().is_success() {
@@ -150,7 +154,7 @@ pub async fn fetch_print_jobs(
         // Print the file
         let output = Command::new("lp")
             .arg("-d")
-            .arg(&job.printer)
+            .arg(&printer_name)
             .arg(temp_path)
             .output()?;
 
@@ -170,6 +174,25 @@ pub async fn fetch_print_jobs(
     }
 
     Ok(jobs)
+}
+
+/// Helper function to get printer name by ID
+/// In a real implementation, this would query the printer storage or database
+async fn get_printer_name_by_id(printer_id: u32) -> String {
+    // In a real implementation, look up the printer name from the saved printers
+    let saved_printers = crate::utils::printer_storage::load_printers();
+
+    // Find the printer with the matching ID
+    for (name, printer) in saved_printers {
+        if let Some(id) = printer.printer_id {
+            if id == printer_id {
+                return name;
+            }
+        }
+    }
+
+    // Fallback if no printer with that ID is found
+    format!("printer_{}", printer_id)
 }
 
 /// Background task to periodically check for print jobs

@@ -2,7 +2,7 @@ use std::fs;
 use crate::models::Config;
 
 /// Path to the config directory
-fn config_dir() -> std::path::PathBuf {
+pub fn config_dir() -> std::path::PathBuf {
     let home_dir = dirs::home_dir().expect("Failed to get home directory");
     home_dir.join(".config/flux-spooler")
 }

@@ -12,10 +12,21 @@ use tempfile::NamedTempFile;
 use crate::models::{Config, PrintRequest, PrinterList};
 use crate::services::print_job::fetch_print_jobs;
 use crate::services::printer::{check_for_new_printers, get_all_printers};
+use crate::utils::printer_storage::load_printers;
 
 /// GET /printers - List all available printers
 #[get("/printers")]
 pub async fn get_printers() -> impl Responder {
+    // Load printers from storage first
+    let saved_printers = load_printers();
+
+    if !saved_printers.is_empty() {
+        // Return the saved printers with their printer_ids
+        let printers = saved_printers.values().cloned().collect();
+        return HttpResponse::Ok().json(PrinterList { printers });
+    }
+
+    // Fallback to getting printers from the system
     let printers = get_all_printers().await;
     HttpResponse::Ok().json(PrinterList { printers })
 }
@@ -113,7 +124,12 @@ pub async fn check_printers_endpoint(
     http_client: web::Data<Client>,
 ) -> impl Responder {
     match check_for_new_printers(printers_data, http_client, config).await {
-        Ok(new_printers) => HttpResponse::Ok().json(new_printers),
+        Ok(new_printers) => {
+            // Return the updated list of printers
+            let saved_printers = load_printers();
+            let printers: Vec<_> = saved_printers.values().cloned().collect();
+            HttpResponse::Ok().json(PrinterList { printers })
+        }
         Err(e) => {
             HttpResponse::InternalServerError().body(format!("Failed to check printers: {}", e))
         }

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub mod api;
+
 /// Configuration structure for the application
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
@@ -43,13 +45,14 @@ pub struct PrintRequest {
     pub printer: String,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Printer {
     pub name: String,
     pub description: String,
     pub location: String,
     pub make_and_model: String,
     pub media_sizes: Vec<String>,
+    pub printer_id: Option<u32>,  // Added printer_id field
 }
 
 #[derive(Serialize, Deserialize)]

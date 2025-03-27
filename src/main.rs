@@ -21,6 +21,7 @@ use services::print_job::job_checker_task;
 use services::printer::{get_all_printers, printer_checker_task};
 use services::websocket::websocket_task;
 use utils::tui::run_tui;
+use utils::printer_storage::{load_printers, save_printers};
 
 /// Command line arguments for the application
 #[derive(Parser)]
@@ -76,12 +77,35 @@ async fn run_server() -> std::io::Result<()> {
     // Initialize printer set
     let printers_set = Arc::new(Mutex::new(HashSet::new()));
 
-    // Initial population of printer set
+    // Initial population of printer set and ensure saved printers are up to date
     {
-        let printers = get_all_printers().await;
+        let system_printers = get_all_printers().await;
         let mut set = printers_set.lock().unwrap();
-        for printer in printers {
-            set.insert(printer.name);
+
+        // Load saved printers
+        let mut saved_printers = load_printers();
+        let mut updated = false;
+
+        // Update saved printers with current system printers
+        for printer in system_printers {
+            set.insert(printer.name.clone());
+
+            // If printer exists, preserve the printer_id
+            if let Some(saved_printer) = saved_printers.get(&printer.name) {
+                let mut updated_printer = printer.clone();
+                updated_printer.printer_id = saved_printer.printer_id;
+                saved_printers.insert(printer.name.clone(), updated_printer);
+                updated = true;
+            } else {
+                // New printer, add it
+                saved_printers.insert(printer.name.clone(), printer);
+                updated = true;
+            }
+        }
+
+        // Save updated printers if needed
+        if updated {
+            save_printers(&saved_printers);
         }
     }
 
@@ -131,7 +155,7 @@ async fn run_server() -> std::io::Result<()> {
             .service(check_jobs_endpoint)
             .service(check_printers_endpoint)
     })
-    .bind(format!("0.0.0.0:{}", api_port))?;
+        .bind(format!("0.0.0.0:{}", api_port))?;
 
     api_server.run().await?;
 
