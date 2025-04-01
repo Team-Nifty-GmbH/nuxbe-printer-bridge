@@ -1,37 +1,43 @@
 # FLUX <-> CUPS Print Server
 
-A REST API server written in Rust that interfaces with CUPS (Common UNIX Printing System) to handle print jobs and retrieve printer information. It can receive print jobs via WebSocket and poll for new printers and print jobs.
+A Rust application that bridges between FLUX ERP and CUPS (Common UNIX Printing System) to manage printers and handle print jobs. It provides a REST API, real-time WebSocket integration, and automatic synchronization between the systems.
 
 ## Features
 
-- REST API endpoints:
-  - `GET /printers` - List all available printers with details (name, description, location, make/model, supported paper sizes)
-  - `POST /print?printer=<printer_name>` - Upload and print a file using the specified printer
-  - `GET /check_printers` - Manually check for new printers
-  - `GET /check_jobs` - Manually check for print jobs
+- **Printer Management**:
+  - Automatic discovery of local CUPS printers
+  - Synchronization of printers with FLUX ERP API
+  - Real-time printer updates and status tracking
 
-- Real-time print job processing:
-  - Subscribes to Laravel Reverb WebSocket for real-time print job notifications
-  - Listens on the "private-FluxErp.Models.PrintJobs" channel for "PrintJobCreated" events
-  - Automatic polling for new print jobs via API
+- **Print Job Processing**:
+  - Real-time print job notifications via Laravel Reverb WebSocket
+  - Periodic polling for new print jobs when WebSocket is disabled
+  - Automated download and printing of documents
+  - Job status updates after printing
 
-- Admin interface:
-  - Web UI for configuration
-  - Configuration settings for instance name, API endpoints, authentication tokens, and Reverb integration
-  - Buttons to trigger printer detection and job checking
-  - WebSocket reconnection option
+- **REST API Endpoints**:
+  - `GET /printers` - List all available printers
+  - `POST /print?printer=<printer_name>` - Upload and print a file
+  - `GET /check_printers` - Manually trigger printer synchronization
+  - `GET /check_jobs` - Manually check for pending print jobs
+
+- **Configuration Options**:
+  - Simple text-based configuration interface
+  - Flexible WebSocket and polling configurations
+  - Customizable update intervals
 
 ## Requirements
 
-- Rust (1.56 or newer)
-- CUPS (installed and configured)
-- Laravel Reverb server for WebSocket integration
+- Rust 2024 edition or newer
+- CUPS installed and configured
+- Network connection to FLUX ERP instance
+- Laravel Reverb for WebSocket functionality (optional)
 
 ## Installation
 
 ### Dependencies
 
-First, make sure you have CUPS installed on your system:
+First, ensure CUPS is installed on your system:
 
 #### Ubuntu/Debian
 ```bash
@@ -49,7 +55,7 @@ sudo dnf install cups cups-client
 brew install cups
 ```
 
-### Building the Application
+### Building from Source
 
 1. Clone the repository:
 ```bash
@@ -57,74 +63,77 @@ git clone https://github.com/Team-Nifty-GmbH/flux-rust-spooler
 cd flux-rust-spooler
 ```
 
-2. Dependencies in `Cargo.toml`:
-```toml
-[dependencies]
-actix-web = "4"
-actix-files = "0.6"
-actix-multipart = "0.6"
-futures = "0.3"
-reqwest = { version = "0.11", features = ["json"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-dirs = "5.0"
-tokio = { version = "1", features = ["full", "macros", "rt-multi-thread"] }
-tempfile = "3.8"
-pusher-rs = "0.4" # For Laravel Reverb integration
-local-ip-address = "0.5" # For getting local IP
-```
-
-3. Compile the application:
-
+2. Build the application:
 ```bash
 cargo build --release
 ```
 
 ## Configuration
 
-The application stores its configuration in `~/.config/flux-spooler/config.json`. The configuration includes:
+The application can be configured using the built-in configuration tool:
 
-- `instance_name`: Name for this printer server instance
-- `printer_check_interval`: Interval in minutes to check for new printers
-- `job_check_interval`: Interval in minutes to check for print jobs
-- `host_url`: Base URL for all API endpoints
-- `notification_token`: Authentication token for printer notifications
-- `print_jobs_token`: Authentication token for print jobs
-- `admin_port`: Admin interface port
-- `api_port`: API port
-- `websocket_url`: WebSocket URL for real-time job notifications
-- `websocket_auth_token`: Authentication token for WebSocket
-- `reverb_app_id`: Laravel Reverb application ID
-- `reverb_app_key`: Laravel Reverb application key
-- `reverb_app_secret`: Laravel Reverb application secret
-- `reverb_use_tls`: Whether to use TLS for Laravel Reverb connection
-- `reverb_host`: Optional custom host for Laravel Reverb (defaults to "mt1")
+```bash
+./target/release/rust-spooler config
+```
 
-You can modify these settings using the admin interface or by directly editing the configuration file.
+The configuration is stored in `~/.config/flux-spooler/config.json` and includes:
+
+- `instance_name`: Unique identifier for this print server
+- `printer_check_interval`: How often to check for printer changes (minutes)
+- `job_check_interval`: How often to check for print jobs (minutes)
+- `flux_url`: Base URL for the FLUX ERP API
+- `flux_api_token`: Authentication token for the API
+- `api_port`: Port to run the API server on
+- `reverb_disabled`: Whether to disable WebSocket and use polling instead
+- `reverb_*` settings: Configuration for Laravel Reverb WebSocket connection
 
 ## Usage
 
-### Running Manually
+### Running the Application
 
-1. Start the server:
+Start the application with:
+
 ```bash
-./target/release/flux-rust-spooler
+./target/release/rust-spooler run
 ```
 
-By default, the server runs:
-- API server on http://0.0.0.0:8080
-- Admin interface on http://0.0.0.0:8081
+By default, the application will:
+1. Detect all available CUPS printers
+2. Synchronize printers with the FLUX ERP system
+3. Begin listening for print jobs via WebSocket or polling
+4. Start the REST API server on the configured port
 
-The application will output its local IP address at startup to help with connections from other devices.
+### Printer Synchronization Flow
+
+The application follows this order for printer synchronization:
+
+1. Check for printers via CUPS
+2. Load saved printers from printer.json
+3. Create new printers in the API with POST requests to `/api/printers`
+4. Get updated printer list with IDs from the API via GET to `/api/printers`
+5. Delete removed printers from the API with DELETE to `/api/printers/{printer_id}`
+6. Update changed printers in the API with PUT to `/api/printers/{printer_id}`
+
+All API requests include the `instance_name` in the request body when required.
+
+### Print Job Flow
+
+For print jobs, the application:
+
+1. Receives job notifications via WebSocket or polling
+2. Validates that the job is for this print server instance
+3. Downloads the file to be printed using the media ID
+4. Prints the file on the appropriate printer
+5. Updates the job status to `is_printed = true` via PUT to `/api/print-jobs/{job_id}`
 
 ### Setting up as a System Service (Linux)
 
 1. Create a systemd service file:
 ```bash
-sudo nano /etc/systemd/system/flux-rust-spooler.service
+sudo nano /etc/systemd/system/flux-spooler.service
 ```
 
-2. Paste the following content, replacing the placeholders with your values:
+2. Add the following content:
 ```ini
 [Unit]
 Description=FLUX <-> CUPS Print Server
@@ -134,17 +143,11 @@ Requires=cups.service
 [Service]
 Type=simple
 User=<your-username>
-ExecStart=/path/to/your/flux-rust-spooler
-WorkingDirectory=/path/to/your/project/directory
+ExecStart=/path/to/your/rust-spooler run
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-
-# Hardening options
-ProtectSystem=full
-PrivateTmp=true
-NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
@@ -153,74 +156,11 @@ WantedBy=multi-user.target
 3. Enable and start the service:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable flux-rust-spooler.service
-sudo systemctl start flux-rust-spooler.service
+sudo systemctl enable flux-spooler.service
+sudo systemctl start flux-spooler.service
 ```
 
-4. Check the status:
-```bash
-sudo systemctl status flux-rust-spooler.service
-```
-
-### Setting up as a Launch Agent (macOS)
-
-1. Create a plist file in your LaunchAgents directory:
-```bash
-mkdir -p ~/Library/LaunchAgents
-nano ~/Library/LaunchAgents/com.teamnifty.flux-rust-spooler.plist
-```
-
-2. Add the following content:
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.teamnifty.flux-rust-spooler</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/path/to/your/flux-rust-spooler</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/tmp/flux-rust-spooler.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/flux-rust-spooler.log</string>
-    <key>WorkingDirectory</key>
-    <string>/path/to/your/project/directory</string>
-</dict>
-</plist>
-```
-
-3. Load the service:
-```bash
-launchctl load ~/Library/LaunchAgents/com.teamnifty.flux-rust-spooler.plist
-```
-
-## Laravel Reverb Integration
-
-The application connects to Laravel Reverb to receive real-time print job notifications. It listens for "PrintJobCreated" events on the "private-FluxErp.Models.PrintJobs" channel. When an event is received, it:
-
-1. Checks if the job is for this print server instance
-2. Fetches the file using the media ID
-3. Sends the file to the specified printer using CUPS
-
-The connection will automatically attempt to reconnect if it fails, with a 30-second delay between reconnection attempts.
-
-## Admin Interface
-
-The admin interface is available at http://0.0.0.0:8081 (or your configured admin port). It allows you to:
-
-1. Configure server settings
-2. Manually check for new printers
-3. Manually check for print jobs
-4. Reconnect to the WebSocket server
-
-## API Examples
+## API Usage Examples
 
 ### List All Printers
 
@@ -228,37 +168,10 @@ The admin interface is available at http://0.0.0.0:8081 (or your configured admi
 curl http://localhost:8080/printers
 ```
 
-Example output:
-```json
-{
-  "printers": [
-    {
-      "name": "HP_LaserJet_Pro_MFP",
-      "description": "HP LaserJet Pro MFP",
-      "location": "Office",
-      "make_and_model": "HP LaserJet Pro MFP M428fdw",
-      "media_sizes": ["A4", "Letter", "Legal", "Executive"]
-    },
-    {
-      "name": "Brother_HL-L2340D",
-      "description": "Brother Printer",
-      "location": "Home",
-      "make_and_model": "Brother HL-L2340D series",
-      "media_sizes": ["A4", "Letter", "A5"]
-    }
-  ]
-}
-```
-
 ### Print a File
 
 ```bash
-curl -X POST -F "file=@/path/to/document.pdf" "http://localhost:8080/print?printer=HP_LaserJet_Pro_MFP"
-```
-
-Example output:
-```
-Print job submitted: request id is HP_LaserJet_Pro_MFP-123 (1 file(s))
+curl -X POST -F "file=@/path/to/document.pdf" "http://localhost:8080/print?printer=MyPrinter"
 ```
 
 ### Check for New Printers
@@ -267,63 +180,59 @@ Print job submitted: request id is HP_LaserJet_Pro_MFP-123 (1 file(s))
 curl http://localhost:8080/check_printers
 ```
 
-### Check for Print Jobs
+### Check for New Print Jobs
 
 ```bash
 curl http://localhost:8080/check_jobs
 ```
 
+## Laravel Reverb Integration
+
+The application uses Laravel Reverb for real-time print job notifications. It listens for "PrintJobCreated" events on the "FluxErp.Models.PrintJobs" channel.
+
+The WebSocket connection automatically reconnects if it fails, with a configurable delay between reconnection attempts.
+
 ## Troubleshooting
 
 ### Empty Printer List
 
-If the `/printers` endpoint returns an empty list:
+If you don't see any printers:
 
 1. Check if CUPS is running:
 ```bash
-systemctl status cups  # Linux
-brew services info cups  # macOS
+systemctl status cups
 ```
 
-2. Verify you can see printers with CUPS command:
+2. Verify that printers are visible to CUPS:
 ```bash
 lpstat -a
+lpstat -p
+lpstat -v
 ```
 
-3. Try alternative printer enumeration methods:
+3. Check application logs for API connection errors
+
+### Print Jobs Not Processing
+
+1. Ensure your instance_name is correctly configured
+2. Check that the API token has the necessary permissions
+3. Verify printer IDs match between the API and local system
+4. Test a manual job check with `curl http://localhost:8080/check_jobs`
+5. Check CUPS logs for printing errors:
 ```bash
-lpstat -p  # List printer status
-lpstat -v  # List printer devices
+sudo journalctl -u cups.service
 ```
 
-4. Ensure your user has permission to access CUPS:
-```bash
-sudo usermod -a -G lpadmin yourusername  # Linux
-```
+### WebSocket Connection Issues
 
-### Print Jobs Failing
-
-1. Check CUPS logs:
-```bash
-sudo journalctl -u cups.service  # Linux
-cat /var/log/cups/error_log  # macOS
-```
-
-2. Verify printer permissions:
-```bash
-sudo lpstat -t
-```
-
-### Laravel Reverb Connection Issues
-
-1. Check that the Reverb app ID, key, and secret are correctly configured
-2. Ensure the custom host is properly set if not using the default
-3. Verify that the connection is not being blocked by a firewall
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+1. Verify Reverb configuration settings
+2. Check for firewall blocking WebSocket connections
+3. Consider enabling polling by setting `reverb_disabled` to true
 
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
