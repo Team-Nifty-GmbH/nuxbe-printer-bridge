@@ -8,8 +8,8 @@ use reqwest::Client;
 use tokio::time;
 
 use crate::models::{Config, Printer};
-use crate::utils::printer_storage::{load_printers, save_printers};
 use crate::services::printer_sync::sync_printers_with_api;
+use crate::utils::printer_storage::{load_printers, save_printers};
 
 /// Get all available printers from the CUPS system
 pub async fn get_all_printers() -> Vec<Printer> {
@@ -95,32 +95,9 @@ pub async fn get_all_printers() -> Vec<Printer> {
             .collect();
     }
 
-    if final_printer_names.is_empty() {
-        let shell_output = Command::new("sh")
-            .arg("-c")
-            .arg("lpstat -a | cut -d' ' -f1")
-            .output()
-            .expect("Failed to execute shell command");
-
-        println!(
-            "Debug shell command: {}",
-            String::from_utf8_lossy(&shell_output.stdout)
-        );
-
-        let shell_list_str = String::from_utf8_lossy(&shell_output.stdout);
-        final_printer_names = shell_list_str
-            .lines()
-            .filter(|line| !line.is_empty())
-            .map(|line| line.to_string())
-            .collect();
-    }
-
     println!("Detected printers: {:?}", final_printer_names);
 
     let mut printers = Vec::new();
-
-    // Load saved printers to preserve printer_id values
-    let saved_printers = load_printers();
 
     for name in final_printer_names {
         // Try to get media sizes
@@ -214,16 +191,13 @@ pub async fn get_all_printers() -> Vec<Printer> {
             }
         }
 
-        // Get printer_id from saved printers if available
-        let printer_id = saved_printers.get(&name).and_then(|p| p.printer_id);
-
         printers.push(Printer {
             name,
             description,
             location,
             make_and_model,
             media_sizes,
-            printer_id, // Include the printer_id field
+            printer_id: None, // IDs will be populated from saved printers later
         });
     }
 
@@ -236,22 +210,23 @@ pub async fn check_for_new_printers(
     http_client: web::Data<Client>,
     config: web::Data<Arc<Mutex<Config>>>,
 ) -> Result<Vec<Printer>, Box<dyn std::error::Error>> {
+    // 1. Get current printers from CUPS
     let current_printers = get_all_printers().await;
 
-    // Load the saved printers
-    let mut saved_printers = load_printers();
+    // 2. Load saved printers from printer.json
+    let saved_printers = load_printers();
 
-    // Convert current printers list to hashmap
+    // Convert current printers list to hashmap with proper IDs from saved_printers
     let mut current_printers_map: HashMap<String, Printer> = HashMap::new();
     for printer in current_printers {
+        let mut updated_printer = printer.clone();
+
         // If printer exists in saved_printers, preserve its printer_id
         if let Some(saved_printer) = saved_printers.get(&printer.name) {
-            let mut updated_printer = printer.clone();
             updated_printer.printer_id = saved_printer.printer_id;
-            current_printers_map.insert(printer.name.clone(), updated_printer);
-        } else {
-            current_printers_map.insert(printer.name.clone(), printer);
         }
+
+        current_printers_map.insert(printer.name.clone(), updated_printer);
     }
 
     // Get the required configuration
@@ -260,35 +235,37 @@ pub async fn check_for_new_printers(
         guard.clone()
     };
 
-    // Sync with API
+    // 3-6. Sync with API following the specified order of operations
     let sync_result = sync_printers_with_api(
         &current_printers_map,
+        &saved_printers,
         &http_client,
         &config_clone
     ).await;
 
-    let synced_printers = match sync_result {
+    let updated_printers = match sync_result {
         Ok(printers) => printers,
         Err(e) => {
             eprintln!("Error syncing printers with API: {}", e);
+            // If sync fails, just use current printers with saved IDs
             current_printers_map
         }
     };
 
     // Save the updated printers
-    save_printers(&synced_printers);
+    save_printers(&updated_printers);
 
     // Update the printers_data set with current printer names
     {
         let mut printers_set = printers_data.lock().unwrap();
         printers_set.clear();
-        for printer in synced_printers.keys() {
+        for printer in updated_printers.keys() {
             printers_set.insert(printer.clone());
         }
     }
 
     // Return new printers (those not in the old saved_printers)
-    let new_printers: Vec<Printer> = synced_printers
+    let new_printers: Vec<Printer> = updated_printers
         .values()
         .filter(|p| !saved_printers.contains_key(&p.name))
         .cloned()
@@ -307,8 +284,31 @@ pub async fn printer_checker_task(
     let config_data = web::Data::new(config);
     let client_data = web::Data::new(http_client);
 
+    // Initial check at startup
+    match check_for_new_printers(
+        printers_data.clone(),
+        client_data.clone(),
+        config_data.clone(),
+    )
+        .await
+    {
+        Ok(new_printers) => {
+            if !new_printers.is_empty() {
+                println!("Found {} new printer(s) at startup", new_printers.len());
+                for printer in new_printers {
+                    println!("  - {}", printer.name);
+                }
+            }
+        }
+        Err(e) => eprintln!("Error checking for new printers at startup: {}", e),
+    }
+
+    // 7. Continue checking at the configured interval
     loop {
         let interval = { config_data.lock().unwrap().printer_check_interval };
+
+        // Sleep first before checking again
+        time::sleep(Duration::from_secs(interval * 60)).await;
 
         match check_for_new_printers(
             printers_data.clone(),
@@ -327,7 +327,5 @@ pub async fn printer_checker_task(
             }
             Err(e) => eprintln!("Error checking for new printers: {}", e),
         }
-
-        time::sleep(Duration::from_secs(interval * 60)).await;
     }
 }

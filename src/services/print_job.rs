@@ -2,8 +2,7 @@ use std::io::Write;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use cursive::reexports::log::debug;
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use tempfile::NamedTempFile;
 use tokio::time;
 
@@ -40,7 +39,7 @@ pub async fn handle_print_job(
         .get(&file_url)
         .header(
             "Authorization",
-            format!("Bearer {}", config.flux_api_token.as_ref().unwrap()),
+            format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&String::new())),
         )
         .send()
         .await?;
@@ -75,18 +74,53 @@ pub async fn handle_print_job(
             print_job.printer_name,
             String::from_utf8_lossy(&output.stdout)
         );
+
+        // Update print job status to is_printed = true
+        if let Some(job_id) = print_job.job_id {
+            match update_print_job_status(job_id, true, http_client, config).await {
+                Ok(_) => println!("Updated print job {} status to completed", job_id),
+                Err(e) => eprintln!("Failed to update print job status: {}", e),
+            }
+        }
+
+        Ok(())
     } else {
-        eprintln!(
+        let error_msg = format!(
             "Failed to print media ID {} on printer {}: {}",
             print_job.media_id,
             print_job.printer_name,
             String::from_utf8_lossy(&output.stderr)
         );
-        return Err(format!(
-            "Failed to print: {}",
-            String::from_utf8_lossy(&output.stderr)
+        eprintln!("{}", error_msg);
+        Err(error_msg.into())
+    }
+}
+
+/// Update print job status in the API
+async fn update_print_job_status(
+    job_id: u32,
+    is_printed: bool,
+    http_client: &Client,
+    config: &Config,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let url = format!("{}/api/print-jobs/{}", config.flux_url, job_id);
+
+    let response = http_client
+        .put(&url)
+        .header(
+            "Authorization",
+            format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&String::new())),
         )
-            .into());
+        .header("Accept", "application/json")
+        .json(&serde_json::json!({
+            "is_printed": is_printed,
+            "instance_name": config.instance_name
+        }))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Err(format!("Failed to update print job status: {}", response.status()).into());
     }
 
     Ok(())
@@ -97,15 +131,17 @@ pub async fn fetch_print_jobs(
     http_client: &Client,
     config: &mut Config,
 ) -> Result<Vec<PrintJob>, Box<dyn std::error::Error>> {
-
     // Construct the URL for fetching print jobs
     let jobs_url = format!("{}/api/print-jobs", config.flux_url);
 
     let response = http_client
         .get(&jobs_url)
-        .bearer_auth(config.flux_api_token.as_ref().unwrap())
-        .header("X-Instance-Name", &config.instance_name)
+        .header("Authorization", format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&String::new())))
         .header("Accept", "application/json")
+        .json(&serde_json::json!({
+            "instance_name": config.instance_name,
+            "is_printed": false  // Only fetch jobs that haven't been printed yet
+        }))
         .send()
         .await?;
 
@@ -114,7 +150,7 @@ pub async fn fetch_print_jobs(
     }
 
     let response_text = response.text().await?;
-    debug!("Response from API: {}", response_text);
+    println!("Response from API: {}", response_text);
 
     let parsed_response: PrintJobResponse = serde_json::from_str(&response_text)?;
     let jobs = parsed_response.data.data;
@@ -127,14 +163,20 @@ pub async fn fetch_print_jobs(
         );
 
         // Get printer name from printer_id
-        // In a real implementation, you would look up the printer name using the printer_id
-        // For now, we'll just use a placeholder method
         let printer_name = get_printer_name_by_id(job.printer_id).await;
 
         let file_url = format!("{}/api/media/{}/download", config.flux_url, job.media_id);
 
         // Download the file
-        let file_response = http_client.get(file_url).send().await?;
+        let file_response = http_client
+            .get(&file_url)
+            .header(
+                "Authorization",
+                format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&String::new())),
+            )
+            .send()
+            .await?;
+
         if !file_response.status().is_success() {
             eprintln!(
                 "Failed to download file for job {}: {}",
@@ -164,6 +206,12 @@ pub async fn fetch_print_jobs(
                 job.id,
                 String::from_utf8_lossy(&output.stdout)
             );
+
+            // Update job status to is_printed = true
+            match update_print_job_status(job.id, true, http_client, config).await {
+                Ok(_) => println!("Updated print job {} status to completed", job.id),
+                Err(e) => eprintln!("Failed to update print job status: {}", e),
+            }
         } else {
             eprintln!(
                 "Failed to print job {}: {}",
@@ -177,9 +225,8 @@ pub async fn fetch_print_jobs(
 }
 
 /// Helper function to get printer name by ID
-/// In a real implementation, this would query the printer storage or database
 async fn get_printer_name_by_id(printer_id: u32) -> String {
-    // In a real implementation, look up the printer name from the saved printers
+    // Look up the printer name from the saved printers
     let saved_printers = crate::utils::printer_storage::load_printers();
 
     // Find the printer with the matching ID
@@ -204,7 +251,7 @@ pub async fn job_checker_task(config: Arc<Mutex<Config>>, http_client: Client) {
         };
 
         if disabled {
-            println!("Polling is disabled. Connecting to Reverb.");
+            println!("Polling is disabled. Using Reverb WebSockets instead.");
             return;
         }
 

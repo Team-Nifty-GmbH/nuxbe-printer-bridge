@@ -112,6 +112,7 @@ pub struct WebsocketPrintJob {
     pub printer_name: String,
     pub printer_server: String,
     pub media_id: String,
+    pub job_id: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]

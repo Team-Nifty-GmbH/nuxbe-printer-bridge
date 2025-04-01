@@ -1,113 +1,111 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-
-use actix_web::web;
 use reqwest::{Client, StatusCode};
 
 use crate::models::{Config, Printer};
-use crate::utils::printer_storage::{load_printers, save_printers};
 use crate::models::api::{ApiPrinter, ApiPrinterResponse};
 
-/// Synchronize printers with the API server
+/// Synchronize printers with the API server following the specified order
 pub async fn sync_printers_with_api(
     local_printers: &HashMap<String, Printer>,
+    saved_printers: &HashMap<String, Printer>,
     http_client: &Client,
     config: &Config,
 ) -> Result<HashMap<String, Printer>, Box<dyn std::error::Error>> {
-    // Get list of printers from API
-    let api_printers = fetch_printers_from_api(http_client, config).await?;
+    // 1. We already have local printers from CUPS
+    // 2. We already loaded saved_printers from printer.json
 
-    let mut updated_printers = local_printers.clone();
-    let mut api_printer_names: HashSet<String> = HashSet::new();
+    let mut updated_printers = saved_printers.clone();
 
-    // Process API printers
-    for api_printer in &api_printers {
-        api_printer_names.insert(api_printer.name.clone());
-
-        // Convert ApiPrinter to local Printer
-        let printer: Printer = api_printer.into();
-
-        if let Some(existing) = local_printers.get(&printer.name) {
-            // Check if printer has changed
-            if *existing != printer {
-                println!("Printer {} has changed, updating", printer.name);
-                updated_printers.insert(printer.name.clone(), printer);
-            }
-        } else {
-            // New printer from API
-            println!("Found new printer {} from API", printer.name);
-            updated_printers.insert(printer.name.clone(), printer);
-        }
-    }
-
-    // Find local printers that need to be created in API
-    let local_printer_names: HashSet<String> = local_printers.keys().cloned().collect();
-    let printers_to_create: Vec<&Printer> = local_printers
-        .values()
-        .filter(|p| !api_printer_names.contains(&p.name))
-        .collect();
-
-    // Create new printers in API
-    for printer in printers_to_create {
-        match create_printer_in_api(printer, http_client, config).await {
-            Ok(new_printer) => {
-                println!("Created printer {} in API with ID {}", new_printer.name,
-                         new_printer.printer_id.unwrap_or(0));
-                updated_printers.insert(new_printer.name.clone(), new_printer);
-            },
-            Err(e) => {
-                eprintln!("Failed to create printer {} in API: {}", printer.name, e);
-            }
-        }
-    }
-
-    // Check for local printers that need updates
-    for (name, local_printer) in local_printers {
-        if api_printer_names.contains(name) && local_printer.printer_id.is_some() {
-            // Check if we need to update this printer in the API
-            if let Some(api_printer) = api_printers.iter().find(|p| p.name == *name) {
-                let api_printer_local: Printer = api_printer.into();
-
-                if api_printer_local != *local_printer {
-                    // Update printer in API
-                    match update_printer_in_api(local_printer, http_client, config).await {
-                        Ok(updated) => {
-                            println!("Updated printer {} in API", updated.name);
-                            updated_printers.insert(updated.name.clone(), updated);
-                        },
-                        Err(e) => {
-                            eprintln!("Failed to update printer {} in API: {}", local_printer.name, e);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Find API printers that are no longer present locally and should be deleted
-    let printers_to_delete: Vec<&ApiPrinter> = api_printers
-        .iter()
-        .filter(|p|
-            !local_printer_names.contains(&p.name) &&
-                p.printer_server == config.instance_name
-        )
-        .collect();
-
-    // Delete printers from API that are no longer present locally
-    for api_printer in printers_to_delete {
-        if let Some(id) = api_printer.id {
-            match delete_printer_from_api(id, http_client, config).await {
-                Ok(_) => {
-                    println!("Deleted printer {} (ID: {}) from API as it's no longer present locally",
-                             api_printer.name, id);
-                    // Remove from updated_printers if it exists there
-                    updated_printers.remove(&api_printer.name);
+    // 3. Find new printers (without ID) and send POST requests
+    let mut new_printer_names: Vec<String> = Vec::new();
+    for (name, printer) in local_printers {
+        if !saved_printers.contains_key(name) || saved_printers[name].printer_id.is_none() {
+            // This is a new printer, create it in API
+            match create_printer_in_api(printer, http_client, config).await {
+                Ok(new_printer) => {
+                    println!("Created printer {} in API with ID {}",
+                             new_printer.name, new_printer.printer_id.unwrap_or(0));
+                    updated_printers.insert(name.clone(), new_printer.clone());
+                    new_printer_names.push(name.clone());
                 },
                 Err(e) => {
-                    eprintln!("Failed to delete printer {} (ID: {}) from API: {}",
-                              api_printer.name, id, e);
+                    eprintln!("Failed to create printer {} in API: {}", name, e);
                 }
             }
+        }
+    }
+
+    // 4. Get updated printer list with IDs from API
+    let api_printers = fetch_printers_from_api(http_client, config).await?;
+    let mut api_printer_map = HashMap::new();
+    for api_printer in api_printers {
+        api_printer_map.insert(api_printer.name.clone(), api_printer);
+    }
+
+    // Update local printers with IDs from API
+    for name in &new_printer_names {
+        if let Some(api_printer) = api_printer_map.get(name) {
+            if let Some(printer) = updated_printers.get_mut(name) {
+                printer.printer_id = api_printer.id;
+            }
+        }
+    }
+
+    // 5. Find removed printers (in saved_printers but not in local_printers)
+    let local_printer_names: HashSet<String> = local_printers.keys().cloned().collect();
+    let saved_printer_names: HashSet<String> = saved_printers.keys().cloned().collect();
+
+    let removed_printers: Vec<&String> = saved_printer_names
+        .difference(&local_printer_names)
+        .collect();
+
+    for name in removed_printers {
+        if let Some(printer) = saved_printers.get(name) {
+            if let Some(id) = printer.printer_id {
+                // Delete from API
+                match delete_printer_from_api(id, http_client, config).await {
+                    Ok(_) => {
+                        println!("Deleted printer {} (ID: {}) from API", name, id);
+                        // Remove from updated_printers if deletion was successful
+                        updated_printers.remove(name);
+                    },
+                    Err(e) => {
+                        eprintln!("Failed to delete printer {} (ID: {}) from API: {}", name, id, e);
+                    }
+                }
+            } else {
+                // No ID, just remove locally
+                updated_printers.remove(name);
+            }
+        }
+    }
+
+    // 6. Check for changed printers
+    for (name, local_printer) in local_printers {
+        if let Some(saved_printer) = saved_printers.get(name) {
+            // Check if printer exists in both and has an ID
+            if saved_printer.printer_id.is_some() && *local_printer != *saved_printer {
+                // Printer has changed, update it
+                let mut updated_printer = local_printer.clone();
+                updated_printer.printer_id = saved_printer.printer_id;
+
+                match update_printer_in_api(&updated_printer, http_client, config).await {
+                    Ok(_) => {
+                        println!("Updated printer {} in API", name);
+                        updated_printers.insert(name.clone(), updated_printer);
+                    },
+                    Err(e) => {
+                        eprintln!("Failed to update printer {} in API: {}", name, e);
+                    }
+                }
+            } else if saved_printer.printer_id.is_none() {
+                // Make sure this printer is in updated_printers
+                updated_printers.insert(name.clone(), local_printer.clone());
+            }
+        } else {
+            // This shouldn't happen as we've already processed new printers,
+            // but include it for completeness
+            updated_printers.insert(name.clone(), local_printer.clone());
         }
     }
 
@@ -124,8 +122,10 @@ async fn fetch_printers_from_api(
     let response = http_client
         .get(&api_url)
         .header("Authorization", format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&"".to_string())))
-        .header("X-Instance-Name", &config.instance_name)
         .header("Accept", "application/json")
+        .json(&serde_json::json!({
+            "instance_name": config.instance_name
+        }))
         .send()
         .await?;
 
@@ -146,7 +146,7 @@ async fn create_printer_in_api(
     http_client: &Client,
     config: &Config,
 ) -> Result<Printer, Box<dyn std::error::Error>> {
-    let api_url = format!("{}/api/printer", config.flux_url);
+    let api_url = format!("{}/api/printers", config.flux_url);
 
     // Convert to ApiPrinter
     let mut api_printer: ApiPrinter = printer.into();
@@ -155,7 +155,6 @@ async fn create_printer_in_api(
     let response = http_client
         .post(&api_url)
         .header("Authorization", format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&"".to_string())))
-        .header("X-Instance-Name", &config.instance_name)
         .header("Accept", "application/json")
         .json(&api_printer)
         .send()
@@ -191,7 +190,7 @@ async fn update_printer_in_api(
     }
 
     let printer_id = printer.printer_id.unwrap();
-    let api_url = format!("{}/api/printer/{}", config.flux_url, printer_id);
+    let api_url = format!("{}/api/printers/{}", config.flux_url, printer_id);
 
     // Convert to ApiPrinter
     let mut api_printer: ApiPrinter = printer.into();
@@ -200,7 +199,6 @@ async fn update_printer_in_api(
     let response = http_client
         .put(&api_url)
         .header("Authorization", format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&"".to_string())))
-        .header("X-Instance-Name", &config.instance_name)
         .header("Accept", "application/json")
         .json(&api_printer)
         .send()
@@ -220,13 +218,15 @@ async fn delete_printer_from_api(
     http_client: &Client,
     config: &Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let api_url = format!("{}/api/printer/{}", config.flux_url, printer_id);
+    let api_url = format!("{}/api/printers/{}", config.flux_url, printer_id);
 
     let response = http_client
         .delete(&api_url)
         .header("Authorization", format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&"".to_string())))
-        .header("X-Instance-Name", &config.instance_name)
         .header("Accept", "application/json")
+        .json(&serde_json::json!({
+            "instance_name": config.instance_name
+        }))
         .send()
         .await?;
 

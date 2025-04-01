@@ -19,7 +19,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
         println!("WebSocket functionality is disabled. Not connecting to Reverb.");
         return;
     }
-    
+
     loop {
         let app_key;
         let app_secret;
@@ -77,7 +77,10 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
             }
 
             async fn on_channel_event(&self, channel: &str, event: &str, data: &str) {
-                println!("Received event: {} on channel: {} with data: {}", event, channel, data);
+                println!(
+                    "Received event: {} on channel: {} with data: {}",
+                    event, channel, data
+                );
 
                 if event == "PrintJobCreated" {
                     println!("Received print job event on channel {}: {}", channel, data);
@@ -97,8 +100,13 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
                                     guard.clone()
                                 };
 
-                                if let Err(e) = handle_print_job(print_job, &client_clone, &mut config_copy).await {
+                                if let Err(e) =
+                                    handle_print_job(print_job, &client_clone, &mut config_copy)
+                                        .await
+                                {
                                     eprintln!("Error handling print job: {}", e);
+                                } else {
+                                    println!("Successfully handled print job from WebSocket");
                                 }
 
                                 // Update the shared config with any token changes
@@ -114,7 +122,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
                     }
                 }
             }
-            
+
             async fn on_error(&self, code: u32, message: &str) {
                 eprintln!("Reverb error: {} (code: {})", message, code);
             }
