@@ -4,11 +4,11 @@ use serde::{Deserialize, Serialize};
 pub struct ApiPrinter {
     pub id: Option<u32>,
     pub name: String,
-    pub description: Option<String>,
+    pub spooler_name: String, // Changed from printer_server
     pub location: Option<String>,
     pub make_and_model: Option<String>,
-    pub media_sizes: Option<Vec<String>>,
-    pub printer_server: String,
+    pub media_sizes: Vec<String>, // Changed from Option<Vec<String>>
+    pub is_active: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -28,11 +28,15 @@ impl From<&crate::models::Printer> for ApiPrinter {
         ApiPrinter {
             id: printer.printer_id,
             name: printer.name.clone(),
-            description: Some(printer.description.clone()),
+            spooler_name: "".to_string(), // Will be set before sending
             location: Some(printer.location.clone()),
             make_and_model: Some(printer.make_and_model.clone()),
-            media_sizes: Some(printer.media_sizes.clone()),
-            printer_server: "".to_string(), // Will be set before sending
+            media_sizes: if printer.media_sizes.is_empty() {
+                vec!["A4".to_string()]
+            } else {
+                printer.media_sizes.clone()
+            },
+            is_active: Some(true),
         }
     }
 }
@@ -42,10 +46,10 @@ impl From<&ApiPrinter> for crate::models::Printer {
     fn from(api_printer: &ApiPrinter) -> Self {
         crate::models::Printer {
             name: api_printer.name.clone(),
-            description: api_printer.description.clone().unwrap_or_default(),
+            description: "".to_string(), // No longer used in API
             location: api_printer.location.clone().unwrap_or_default(),
             make_and_model: api_printer.make_and_model.clone().unwrap_or_default(),
-            media_sizes: api_printer.media_sizes.clone().unwrap_or_default(),
+            media_sizes: api_printer.media_sizes.clone(),
             printer_id: api_printer.id,
         }
     }

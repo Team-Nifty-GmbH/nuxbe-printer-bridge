@@ -9,6 +9,7 @@ use tokio::time;
 use crate::models::{Config, PrintJob, PrintJobResponse, WebsocketPrintJob};
 
 /// Process a print job received through WebSocket
+// Update handle_print_job to use the new format when needed
 pub async fn handle_print_job(
     print_job: WebsocketPrintJob,
     http_client: &Client,
@@ -16,17 +17,18 @@ pub async fn handle_print_job(
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "Processing WebSocket print job for printer: {} from server: {} with media id: {}",
-        print_job.printer_name, print_job.printer_server, print_job.media_id
+        print_job.printer_name, print_job.spooler_name, print_job.media_id
     );
 
     // Check if this job is for this instance
-    if print_job.printer_server != config.instance_name {
+    if print_job.spooler_name != config.instance_name {
         println!(
             "Ignoring job for different printer server: {} (we are: {})",
-            print_job.printer_server, config.instance_name
+            print_job.spooler_name, config.instance_name
         );
         return Ok(());
     }
+
 
     // Construct the URL to get the file
     let file_url = format!(
@@ -96,10 +98,10 @@ pub async fn handle_print_job(
     }
 }
 
-/// Update print job status in the API
+// In the update_print_job_status function in src/services/print_job.rs
 async fn update_print_job_status(
     job_id: u32,
-    is_printed: bool,
+    is_completed: bool,
     http_client: &Client,
     config: &Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -113,20 +115,23 @@ async fn update_print_job_status(
         )
         .header("Accept", "application/json")
         .json(&serde_json::json!({
-            "is_printed": is_printed,
-            "instance_name": config.instance_name
+            "is_completed": is_completed,
+            "spooler_name": config.instance_name // Changed from instance_name
         }))
         .send()
         .await?;
 
     if !response.status().is_success() {
-        return Err(format!("Failed to update print job status: {}", response.status()).into());
+        let status = response.status(); // Save the status before consuming the response
+        let error_text = response.text().await?;
+        return Err(format!("Failed to update print job status: {} - {}", status, error_text).into());
     }
 
     Ok(())
 }
 
 /// Fetch print jobs from the API and process them
+// Also in the fetch_print_jobs function, update the JSON payload
 pub async fn fetch_print_jobs(
     http_client: &Client,
     config: &mut Config,
@@ -139,11 +144,12 @@ pub async fn fetch_print_jobs(
         .header("Authorization", format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&String::new())))
         .header("Accept", "application/json")
         .json(&serde_json::json!({
-            "instance_name": config.instance_name,
-            "is_printed": false  // Only fetch jobs that haven't been printed yet
+            "spooler_name": config.instance_name, // Changed from instance_name
+            "is_completed": false  // Only fetch jobs that haven't been printed yet
         }))
         .send()
         .await?;
+
 
     if !response.status().is_success() {
         return Err(format!("Failed to fetch print jobs: {}", response.status()).into());

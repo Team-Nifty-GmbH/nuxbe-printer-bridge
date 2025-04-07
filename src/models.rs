@@ -90,6 +90,15 @@ pub struct PrintJobPaginatedData {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct PrintJobCreateRequest {
+    pub media_id: u32,
+    pub printer_id: u32,
+    pub user_id: Option<u32>,
+    pub quantity: u32,
+    pub size: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct PageLink {
     pub url: Option<String>,
     pub label: String,
@@ -110,7 +119,7 @@ pub struct PrintJob {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct WebsocketPrintJob {
     pub printer_name: String,
-    pub printer_server: String,
+    pub spooler_name: String, // Changed from printer_server
     pub media_id: String,
     pub job_id: Option<u32>,
 }

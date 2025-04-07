@@ -140,7 +140,6 @@ async fn fetch_printers_from_api(
     Ok(parsed_response.data.data)
 }
 
-/// Create a new printer in the API
 async fn create_printer_in_api(
     printer: &Printer,
     http_client: &Client,
@@ -150,7 +149,7 @@ async fn create_printer_in_api(
 
     // Convert to ApiPrinter
     let mut api_printer: ApiPrinter = printer.into();
-    api_printer.printer_server = config.instance_name.clone();
+    api_printer.spooler_name = config.instance_name.clone(); // Set spooler_name instead of printer_server
 
     let response = http_client
         .post(&api_url)
@@ -161,7 +160,9 @@ async fn create_printer_in_api(
         .await?;
 
     if response.status() != StatusCode::CREATED && !response.status().is_success() {
-        return Err(format!("Failed to create printer: {}", response.status()).into());
+        let status = response.status(); // Save the status before consuming the response
+        let error_text = response.text().await?;
+        return Err(format!("Failed to create printer: {} - {}", status, error_text).into());
     }
 
     let response_text = response.text().await?;
@@ -179,7 +180,7 @@ async fn create_printer_in_api(
     Ok(new_printer)
 }
 
-/// Update an existing printer in the API
+// Also update the update_printer_in_api function
 async fn update_printer_in_api(
     printer: &Printer,
     http_client: &Client,
@@ -194,7 +195,7 @@ async fn update_printer_in_api(
 
     // Convert to ApiPrinter
     let mut api_printer: ApiPrinter = printer.into();
-    api_printer.printer_server = config.instance_name.clone();
+    api_printer.spooler_name = config.instance_name.clone();
 
     let response = http_client
         .put(&api_url)
@@ -205,14 +206,16 @@ async fn update_printer_in_api(
         .await?;
 
     if !response.status().is_success() {
-        return Err(format!("Failed to update printer: {}", response.status()).into());
+        let status = response.status(); // Save the status before consuming the response
+        let error_text = response.text().await?;
+        return Err(format!("Failed to update printer: {} - {}", status, error_text).into());
     }
 
     // Return the updated printer
     Ok(printer.clone())
 }
 
-/// Delete a printer from the API
+// For delete_printer_from_api, also update the JSON payload to include spooler_name instead of instance_name
 async fn delete_printer_from_api(
     printer_id: u32,
     http_client: &Client,
@@ -225,13 +228,15 @@ async fn delete_printer_from_api(
         .header("Authorization", format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&"".to_string())))
         .header("Accept", "application/json")
         .json(&serde_json::json!({
-            "instance_name": config.instance_name
+            "spooler_name": config.instance_name // Changed from instance_name
         }))
         .send()
         .await?;
 
     if !response.status().is_success() {
-        return Err(format!("Failed to delete printer: {}", response.status()).into());
+        let status = response.status(); // Save the status before consuming the response
+        let error_text = response.text().await?;
+        return Err(format!("Failed to delete printer: {} - {}", status, error_text).into());
     }
 
     Ok(())
