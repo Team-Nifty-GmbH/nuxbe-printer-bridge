@@ -1,8 +1,7 @@
+use crate::models::Printer;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use crate::models::Printer;
-use crate::config;
 
 /// Path to the printers JSON file
 pub fn printers_file_path() -> PathBuf {

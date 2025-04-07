@@ -1,8 +1,8 @@
+use reqwest::Client;
 use std::io::Write;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use reqwest::{Client, StatusCode};
 use tempfile::NamedTempFile;
 use tokio::time;
 
@@ -164,11 +164,11 @@ pub async fn fetch_print_jobs(
     // Process each job
     for job in &jobs {
         println!(
-            "Processing print job {} for printer ID {}",
+            "Processing print job {} for printer ID {:?}",
             job.id, job.printer_id
         );
 
-        // Get printer name from printer_id
+        // Get printer name based on printer_id (which may be None)
         let printer_name = get_printer_name_by_id(job.printer_id).await;
 
         let file_url = format!("{}/api/media/{}/download", config.flux_url, job.media_id);
@@ -231,7 +231,14 @@ pub async fn fetch_print_jobs(
 }
 
 /// Helper function to get printer name by ID
-async fn get_printer_name_by_id(printer_id: u32) -> String {
+async fn get_printer_name_by_id(printer_id: Option<u32>) -> String {
+    // If printer_id is None, use a default printer
+    if printer_id.is_none() {
+        return get_default_printer().await;
+    }
+
+    let printer_id = printer_id.unwrap();
+
     // Look up the printer name from the saved printers
     let saved_printers = crate::utils::printer_storage::load_printers();
 
@@ -245,7 +252,7 @@ async fn get_printer_name_by_id(printer_id: u32) -> String {
     }
 
     // Fallback if no printer with that ID is found
-    format!("printer_{}", printer_id)
+    get_default_printer().await
 }
 
 /// Background task to periodically check for print jobs
@@ -287,4 +294,34 @@ pub async fn job_checker_task(config: Arc<Mutex<Config>>, http_client: Client) {
 
         time::sleep(Duration::from_secs(interval * 60)).await;
     }
+}
+
+async fn get_default_printer() -> String {
+    // Get the system's default printer, or use the first available printer
+    let lpstat_output = Command::new("lpstat")
+        .arg("-d")
+        .output();
+
+    if let Ok(output) = lpstat_output {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        if output_str.contains("system default destination: ") {
+            // Extract default printer name
+            if let Some(printer) = output_str
+                .lines()
+                .find(|line| line.contains("system default destination: "))
+                .and_then(|line| line.split("system default destination: ").nth(1))
+            {
+                return printer.trim().to_string();
+            }
+        }
+    }
+
+    // Fallback to first available printer
+    let printers = crate::services::printer::get_all_printers().await;
+    if !printers.is_empty() {
+        return printers[0].name.clone();
+    }
+
+    // Last resort
+    "default".to_string()
 }

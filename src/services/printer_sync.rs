@@ -14,19 +14,37 @@ pub async fn sync_printers_with_api(
     // 1. We already have local printers from CUPS
     // 2. We already loaded saved_printers from printer.json
 
-    let mut updated_printers = saved_printers.clone();
+    let mut updated_printers = local_printers.clone(); // Start with local printers
 
-    // 3. Find new printers (without ID) and send POST requests
-    let mut new_printer_names: Vec<String> = Vec::new();
-    for (name, printer) in local_printers {
-        if !saved_printers.contains_key(name) || saved_printers[name].printer_id.is_none() {
-            // This is a new printer, create it in API
+    // First, get the existing printers from the API
+    let api_printers = fetch_printers_from_api(http_client, config).await?;
+
+    // Create a map of API printers by name
+    let mut api_printer_map = HashMap::new();
+    for api_printer in api_printers {
+        api_printer_map.insert(api_printer.name.clone(), api_printer);
+    }
+
+    // Update local printers with IDs from API printers (preserve IDs)
+    for (name, printer) in &mut updated_printers {
+        if let Some(api_printer) = api_printer_map.get(name) {
+            printer.printer_id = api_printer.id;
+            println!("Found existing printer in API: {} with ID {}", name, api_printer.id.unwrap_or(0));
+        } else if let Some(saved_printer) = saved_printers.get(name) {
+            // If not in API but in saved, preserve existing ID
+            printer.printer_id = saved_printer.printer_id;
+        }
+    }
+
+    // 3. Create new printers that don't have IDs yet
+    for (name, printer) in updated_printers.iter_mut() {
+        if printer.printer_id.is_none() {
+            println!("Creating new printer in API: {}", name);
             match create_printer_in_api(printer, http_client, config).await {
                 Ok(new_printer) => {
                     println!("Created printer {} in API with ID {}",
                              new_printer.name, new_printer.printer_id.unwrap_or(0));
-                    updated_printers.insert(name.clone(), new_printer.clone());
-                    new_printer_names.push(name.clone());
+                    *printer = new_printer.clone();
                 },
                 Err(e) => {
                     eprintln!("Failed to create printer {} in API: {}", name, e);
@@ -35,23 +53,7 @@ pub async fn sync_printers_with_api(
         }
     }
 
-    // 4. Get updated printer list with IDs from API
-    let api_printers = fetch_printers_from_api(http_client, config).await?;
-    let mut api_printer_map = HashMap::new();
-    for api_printer in api_printers {
-        api_printer_map.insert(api_printer.name.clone(), api_printer);
-    }
-
-    // Update local printers with IDs from API
-    for name in &new_printer_names {
-        if let Some(api_printer) = api_printer_map.get(name) {
-            if let Some(printer) = updated_printers.get_mut(name) {
-                printer.printer_id = api_printer.id;
-            }
-        }
-    }
-
-    // 5. Find removed printers (in saved_printers but not in local_printers)
+    // 4. Find removed printers (in saved_printers but not in local_printers)
     let local_printer_names: HashSet<String> = local_printers.keys().cloned().collect();
     let saved_printer_names: HashSet<String> = saved_printers.keys().cloned().collect();
 
@@ -66,46 +68,33 @@ pub async fn sync_printers_with_api(
                 match delete_printer_from_api(id, http_client, config).await {
                     Ok(_) => {
                         println!("Deleted printer {} (ID: {}) from API", name, id);
-                        // Remove from updated_printers if deletion was successful
-                        updated_printers.remove(name);
                     },
                     Err(e) => {
                         eprintln!("Failed to delete printer {} (ID: {}) from API: {}", name, id, e);
                     }
                 }
-            } else {
-                // No ID, just remove locally
-                updated_printers.remove(name);
             }
         }
     }
 
-    // 6. Check for changed printers
+    // 5. Update changed printers
     for (name, local_printer) in local_printers {
         if let Some(saved_printer) = saved_printers.get(name) {
             // Check if printer exists in both and has an ID
             if saved_printer.printer_id.is_some() && *local_printer != *saved_printer {
-                // Printer has changed, update it
-                let mut updated_printer = local_printer.clone();
-                updated_printer.printer_id = saved_printer.printer_id;
-
-                match update_printer_in_api(&updated_printer, http_client, config).await {
-                    Ok(_) => {
-                        println!("Updated printer {} in API", name);
-                        updated_printers.insert(name.clone(), updated_printer);
-                    },
-                    Err(e) => {
-                        eprintln!("Failed to update printer {} in API: {}", name, e);
+                // Get the updated printer from our map
+                if let Some(printer) = updated_printers.get_mut(name) {
+                    println!("Updating printer {} in API", name);
+                    match update_printer_in_api(printer, http_client, config).await {
+                        Ok(_) => {
+                            println!("Updated printer {} in API", name);
+                        },
+                        Err(e) => {
+                            eprintln!("Failed to update printer {} in API: {}", name, e);
+                        }
                     }
                 }
-            } else if saved_printer.printer_id.is_none() {
-                // Make sure this printer is in updated_printers
-                updated_printers.insert(name.clone(), local_printer.clone());
             }
-        } else {
-            // This shouldn't happen as we've already processed new printers,
-            // but include it for completeness
-            updated_printers.insert(name.clone(), local_printer.clone());
         }
     }
 

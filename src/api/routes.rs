@@ -124,7 +124,7 @@ pub async fn check_printers_endpoint(
     http_client: web::Data<Client>,
 ) -> impl Responder {
     match check_for_new_printers(printers_data, http_client, config).await {
-        Ok(new_printers) => {
+        Ok(_new_printers) => {
             // Return the updated list of printers
             let saved_printers = load_printers();
             let printers: Vec<_> = saved_printers.values().cloned().collect();
