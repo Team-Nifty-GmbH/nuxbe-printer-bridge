@@ -1,5 +1,4 @@
 #### Variables for easier configuration
-## @name config
 #@baseUrl = http://your-flux-erp.example.com
 #@apiToken = your-api-token-here
 #@spoolerName = default-instance
