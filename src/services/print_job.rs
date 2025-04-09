@@ -171,7 +171,7 @@ pub async fn fetch_print_jobs(
         // Get printer name based on printer_id (which may be None)
         let printer_name = get_printer_name_by_id(job.printer_id).await;
 
-        let file_url = format!("{}/api/media/{}/download", config.flux_url, job.media_id);
+        let file_url = format!("{}/api/media/private/{}", config.flux_url, job.media_id);
 
         // Download the file
         let file_response = http_client

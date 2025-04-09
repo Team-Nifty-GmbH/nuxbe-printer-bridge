@@ -1,0 +1,121 @@
+#### Variables for easier configuration
+## @name config
+#@baseUrl = http://your-flux-erp.example.com
+#@apiToken = your-api-token-here
+#@spoolerName = default-instance
+
+### Get all printers from FLUX ERP
+GET {{baseUrl}}/api/printers
+Accept: application/json
+Authorization: Bearer {{apiToken}}
+
+### Get printers for specific spooler
+GET {{baseUrl}}/api/printers?spooler_name={{spoolerName}}
+Accept: application/json
+Authorization: Bearer {{apiToken}}
+
+### Create a new printer in FLUX ERP
+POST {{baseUrl}}/api/printers
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer {{apiToken}}
+
+{
+  "name": "TestPrinter",
+  "spooler_name": "{{spoolerName}}",
+  "location": "Office",
+  "make_and_model": "HP LaserJet Pro",
+  "media_sizes": ["A4", "A5", "Letter"],
+  "is_active": true
+}
+
+### Update an existing printer
+# @name updatePrinter
+PUT {{baseUrl}}/api/printers/1
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer {{apiToken}}
+
+{
+  "name": "UpdatedPrinter",
+  "spooler_name": "{{spoolerName}}",
+  "location": "Main Office",
+  "make_and_model": "HP LaserJet Pro",
+  "media_sizes": ["A4", "A3", "Letter"],
+  "is_active": true
+}
+
+### Delete a printer
+DELETE {{baseUrl}}/api/printers/11
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer {{apiToken}}
+
+{
+  "spooler_name": "{{spoolerName}}"
+}
+
+### Get all print jobs
+GET {{baseUrl}}/api/print-jobs
+Accept: application/json
+Authorization: Bearer {{apiToken}}
+
+### Get pending print jobs for specific spooler
+GET {{baseUrl}}/api/print-jobs?spooler_name={{spoolerName}}&is_completed=false
+Accept: application/json
+Authorization: Bearer {{apiToken}}
+
+### Create a new print job
+POST {{baseUrl}}/api/print-jobs
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer {{apiToken}}
+
+{
+  "media_id": 123,
+  "printer_id": 1,
+  "user_id": 1,
+  "quantity": 1,
+  "size": "A4",
+  "spooler_name": "{{spoolerName}}"
+}
+
+### Mark a print job as completed
+PUT {{baseUrl}}/api/print-jobs/1
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer {{apiToken}}
+
+{
+  "is_completed": true,
+  "spooler_name": "{{spoolerName}}"
+}
+
+### Download a media file (for print jobs)
+GET {{baseUrl}}/api/media/private/5084
+Authorization: Bearer {{apiToken}}
+
+### Upload a new media file (for creating print jobs)
+# @name uploadMedia
+POST {{baseUrl}}/api/media
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+Authorization: Bearer {{apiToken}}
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="document.pdf"
+Content-Type: application/pdf
+
+< ./path/to/your/document.pdf
+--WebAppBoundary--
+
+### Get Reverb authentication token
+# This would be used by the spooler to authenticate with Reverb
+POST {{baseUrl}}/broadcasting/auth
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {{apiToken}}
+
+{
+  "socket_id": "12345.67890",
+  "channel_name": "private-FluxErp.Models.PrintJobs"
+}
