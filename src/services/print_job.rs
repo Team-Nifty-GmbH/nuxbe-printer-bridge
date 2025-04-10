@@ -3,6 +3,7 @@ use std::io::Write;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use cursive::reexports::log::debug;
 use tempfile::NamedTempFile;
 use tokio::time;
 
@@ -29,10 +30,9 @@ pub async fn handle_print_job(
         return Ok(());
     }
 
-
     // Construct the URL to get the file
     let file_url = format!(
-        "{}/api/media/{}/download",
+        "{}/api/media/private/{}",
         config.flux_url, print_job.media_id
     );
 
@@ -41,8 +41,12 @@ pub async fn handle_print_job(
         .get(&file_url)
         .header(
             "Authorization",
-            format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&String::new())),
+            format!(
+                "Bearer {}",
+                config.flux_api_token.as_ref().unwrap_or(&String::new())
+            ),
         )
+        .header("Accept", "application/octet-stream") // Add this to request binary data
         .send()
         .await?;
 
@@ -52,7 +56,7 @@ pub async fn handle_print_job(
             print_job.media_id,
             file_response.status()
         )
-            .into());
+        .into());
     }
 
     let file_content = file_response.bytes().await?;
@@ -98,25 +102,27 @@ pub async fn handle_print_job(
     }
 }
 
-// In the update_print_job_status function in src/services/print_job.rs
 async fn update_print_job_status(
     job_id: u32,
     is_completed: bool,
     http_client: &Client,
     config: &Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let url = format!("{}/api/print-jobs/{}", config.flux_url, job_id);
+    let url = format!("{}/api/print-jobs", config.flux_url);
 
     let response = http_client
         .put(&url)
         .header(
             "Authorization",
-            format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&String::new())),
+            format!(
+                "Bearer {}",
+                config.flux_api_token.as_ref().unwrap_or(&String::new())
+            ),
         )
         .header("Accept", "application/json")
         .json(&serde_json::json!({
+            "id": job_id,
             "is_completed": is_completed,
-            "spooler_name": config.instance_name // Changed from instance_name
         }))
         .send()
         .await?;
@@ -124,7 +130,11 @@ async fn update_print_job_status(
     if !response.status().is_success() {
         let status = response.status(); // Save the status before consuming the response
         let error_text = response.text().await?;
-        return Err(format!("Failed to update print job status: {} - {}", status, error_text).into());
+        return Err(format!(
+            "Failed to update print job status: {} - {}",
+            status, error_text
+        )
+        .into());
     }
 
     Ok(())
@@ -137,96 +147,113 @@ pub async fn fetch_print_jobs(
     config: &mut Config,
 ) -> Result<Vec<PrintJob>, Box<dyn std::error::Error>> {
     // Construct the URL for fetching print jobs
-    let jobs_url = format!("{}/api/print-jobs", config.flux_url);
+    let jobs_url = format!("{}/api/print-jobs?filter[printer.spooler_name]={}&filter[is_completed]=false", config.flux_url, config.instance_name);
 
     let response = http_client
         .get(&jobs_url)
-        .header("Authorization", format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&String::new())))
+        .header(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                config.flux_api_token.as_ref().unwrap_or(&String::new())
+            ),
+        )
         .header("Accept", "application/json")
         .json(&serde_json::json!({
-            "spooler_name": config.instance_name, // Changed from instance_name
-            "is_completed": false  // Only fetch jobs that haven't been printed yet
+            "spooler_name": config.instance_name,
+            "is_completed": false
         }))
         .send()
         .await?;
-
 
     if !response.status().is_success() {
         return Err(format!("Failed to fetch print jobs: {}", response.status()).into());
     }
 
     let response_text = response.text().await?;
-    println!("Response from API: {}", response_text);
+    debug!("Response from API: {}", response_text);
 
-    let parsed_response: PrintJobResponse = serde_json::from_str(&response_text)?;
+    let parsed_response: PrintJobResponse = match serde_json::from_str(&response_text) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return Err(format!("Failed to parse API response: {}", e).into());
+        }
+    };
+
     let jobs = parsed_response.data.data;
 
-    // Process each job
-    for job in &jobs {
-        println!(
-            "Processing print job {} for printer ID {:?}",
-            job.id, job.printer_id
-        );
+    if !jobs.is_empty() {
+        println!("Processing {} print job(s)", jobs.len());
 
-        // Get printer name based on printer_id (which may be None)
-        let printer_name = get_printer_name_by_id(job.printer_id).await;
+        // Process each job
+        for job in &jobs {
+            println!("Processing print job {} for printer ID {:?}", job.id, job.printer_id);
 
-        let file_url = format!("{}/api/media/private/{}", config.flux_url, job.media_id);
+            // Get printer name based on printer_id (which may be None)
+            let printer_name = get_printer_name_by_id(job.printer_id).await;
 
-        // Download the file
-        let file_response = http_client
-            .get(&file_url)
-            .header(
-                "Authorization",
-                format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&String::new())),
-            )
-            .send()
-            .await?;
+            let file_url = format!("{}/api/media/private/{}", config.flux_url, job.media_id);
 
-        if !file_response.status().is_success() {
-            eprintln!(
-                "Failed to download file for job {}: {}",
-                job.id,
-                file_response.status()
-            );
-            continue;
-        }
+            // Download the file
+            let file_response = http_client
+                .get(&file_url)
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        config.flux_api_token.as_ref().unwrap_or(&String::new())
+                    ),
+                )
+                .header("Accept", "application/octet-stream")
+                .send()
+                .await?;
 
-        let file_content = file_response.bytes().await?;
-
-        // Create a temporary file
-        let mut temp_file = NamedTempFile::new()?;
-        temp_file.write_all(&file_content)?;
-        let temp_path = temp_file.path().to_str().unwrap();
-
-        // Print the file
-        let output = Command::new("lp")
-            .arg("-d")
-            .arg(&printer_name)
-            .arg(temp_path)
-            .output()?;
-
-        if output.status.success() {
-            println!(
-                "Successfully printed job {}: {}",
-                job.id,
-                String::from_utf8_lossy(&output.stdout)
-            );
-
-            // Update job status to is_printed = true
-            match update_print_job_status(job.id, true, http_client, config).await {
-                Ok(_) => println!("Updated print job {} status to completed", job.id),
-                Err(e) => eprintln!("Failed to update print job status: {}", e),
+            if !file_response.status().is_success() {
+                eprintln!(
+                    "Failed to download file for job {}: {}",
+                    job.id,
+                    file_response.status()
+                );
+                continue;
             }
-        } else {
-            eprintln!(
-                "Failed to print job {}: {}",
-                job.id,
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-    }
 
+            let file_content = file_response.bytes().await?;
+
+            // Create a temporary file
+            let mut temp_file = NamedTempFile::new()?;
+            temp_file.write_all(&file_content)?;
+            let temp_path = temp_file.path().to_str().unwrap();
+
+            // Print the file
+            let output = Command::new("lp")
+                .arg("-d")
+                .arg(&printer_name)
+                .arg(temp_path)
+                .output()?;
+
+            if output.status.success() {
+                println!(
+                    "Successfully printed job {}: {}",
+                    job.id,
+                    String::from_utf8_lossy(&output.stdout)
+                );
+
+                // Update job status to is_printed = true
+                match update_print_job_status(job.id, true, http_client, config).await {
+                    Ok(_) => println!("Updated print job {} status to completed", job.id),
+                    Err(e) => eprintln!("Failed to update print job status: {}", e),
+                }
+            } else {
+                eprintln!(
+                    "Failed to print job {}: {}",
+                    job.id,
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+    } else { 
+        println!("No print jobs found for this instance.");
+    }
     Ok(jobs)
 }
 
@@ -298,9 +325,7 @@ pub async fn job_checker_task(config: Arc<Mutex<Config>>, http_client: Client) {
 
 async fn get_default_printer() -> String {
     // Get the system's default printer, or use the first available printer
-    let lpstat_output = Command::new("lpstat")
-        .arg("-d")
-        .output();
+    let lpstat_output = Command::new("lpstat").arg("-d").output();
 
     if let Ok(output) = lpstat_output {
         let output_str = String::from_utf8_lossy(&output.stdout);

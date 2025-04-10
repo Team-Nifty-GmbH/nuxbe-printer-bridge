@@ -18,12 +18,10 @@ pub fn load_printers() -> HashMap<String, Printer> {
     }
 
     match fs::read_to_string(&path) {
-        Ok(contents) => {
-            serde_json::from_str(&contents).unwrap_or_else(|e| {
-                eprintln!("Error parsing printers file: {}. Using empty list.", e);
-                HashMap::new()
-            })
-        }
+        Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|e| {
+            eprintln!("Error parsing printers file: {}. Using empty list.", e);
+            HashMap::new()
+        }),
         Err(_) => {
             println!("Printers file not found. Starting with empty list.");
             HashMap::new()
@@ -46,7 +44,11 @@ pub fn save_printers(printers: &HashMap<String, Printer>) {
             if let Err(e) = fs::write(&path, json) {
                 eprintln!("Failed to save printers file: {}", e);
             } else {
-                println!("Successfully saved {} printers to {}", printers.len(), path.display());
+                println!(
+                    "Successfully saved {} printers to {}",
+                    printers.len(),
+                    path.display()
+                );
             }
         }
         Err(e) => eprintln!("Failed to serialize printers: {}", e),

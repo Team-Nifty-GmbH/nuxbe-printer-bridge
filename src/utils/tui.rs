@@ -1,8 +1,8 @@
+use cursive::Cursive;
 use cursive::align::HAlign;
 use cursive::traits::*;
 use cursive::view::Margins;
 use cursive::views::{Checkbox, Dialog, EditView, LinearLayout, PaddedView, TextView};
-use cursive::Cursive;
 use std::sync::{Arc, Mutex};
 
 use crate::config::{load_config, save_config};
@@ -117,7 +117,6 @@ fn create_api_settings(config: &Config) -> impl View {
                         .content(config.flux_url.clone())
                         .with_name("flux_url"),
                 )
-             
                 .child(TextView::new("Flux Api Token:"))
                 .child(
                     EditView::new()
@@ -134,12 +133,13 @@ fn create_reverb_settings(config: &Config) -> impl View {
     let reverb_disabled = Checkbox::new()
         .with_checked(config.reverb_disabled)
         .with_name("reverb_disabled");
-    
-    // Create a layout for the Reverb settings
+
     let mut layout = LinearLayout::vertical()
-        .child(LinearLayout::horizontal()
-                   .child(reverb_disabled)
-                   .child(TextView::new("Disable Websockets: ")),)
+        .child(
+            LinearLayout::horizontal()
+                .child(reverb_disabled)
+                .child(TextView::new("Disable Websockets: ")),
+        )
         .child(TextView::new("Reverb App ID:"))
         .child(
             EditView::new()
@@ -159,7 +159,6 @@ fn create_reverb_settings(config: &Config) -> impl View {
                 .with_name("reverb_app_secret"),
         );
 
-    // Add the TLS checkbox
     let use_tls = Checkbox::new()
         .with_checked(config.reverb_use_tls)
         .with_name("reverb_use_tls");
@@ -170,7 +169,6 @@ fn create_reverb_settings(config: &Config) -> impl View {
             .child(TextView::new(" Use TLS for Reverb Connection")),
     );
 
-    // Add the host field
     layout.add_child(TextView::new("Reverb Host"));
     layout.add_child(
         EditView::new()
@@ -178,7 +176,6 @@ fn create_reverb_settings(config: &Config) -> impl View {
             .with_name("reverb_host"),
     );
 
-    // Add the host field
     layout.add_child(TextView::new("Reverb Auth Endpoint"));
     layout.add_child(
         EditView::new()
@@ -197,7 +194,6 @@ fn save_config_from_ui(s: &mut Cursive, config: Arc<Mutex<Config>>) {
     // Get a mutable reference to the config
     let mut config_guard = config.lock().unwrap();
 
-    // Update server settings
     config_guard.instance_name = s
         .call_on_name("instance_name", |view: &mut EditView| {
             view.get_content().to_string()
@@ -210,7 +206,6 @@ fn save_config_from_ui(s: &mut Cursive, config: Arc<Mutex<Config>>) {
         })
         .unwrap_or(8080);
 
-    // Update interval settings
     config_guard.printer_check_interval = s
         .call_on_name("printer_check_interval", |view: &mut EditView| {
             view.get_content().parse::<u64>().unwrap_or(5)
@@ -223,24 +218,23 @@ fn save_config_from_ui(s: &mut Cursive, config: Arc<Mutex<Config>>) {
         })
         .unwrap_or(2);
 
-    // Update API settings
     config_guard.flux_url = s
         .call_on_name("flux_url", |view: &mut EditView| {
             view.get_content().to_string()
         })
         .unwrap_or_default();
 
-    config_guard.flux_api_token = Option::from(s
-        .call_on_name("flux_api_token", |view: &mut EditView| {
+    config_guard.flux_api_token = Option::from(
+        s.call_on_name("flux_api_token", |view: &mut EditView| {
             view.get_content().to_string()
         })
-        .unwrap_or_default());
+        .unwrap_or_default(),
+    );
 
     config_guard.reverb_disabled = s
         .call_on_name("reverb_disabled", |view: &mut Checkbox| view.is_checked())
         .unwrap_or(false);
-    
-    // Update WebSocket settings
+
     config_guard.reverb_app_id = s
         .call_on_name("reverb_app_id", |view: &mut EditView| {
             view.get_content().to_string()

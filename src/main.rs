@@ -3,7 +3,7 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use actix_web::{web, App, HttpServer};
+use actix_web::{App, HttpServer, web};
 use clap::{Parser, Subcommand};
 use local_ip_address::local_ip;
 use reqwest::Client;
@@ -20,8 +20,8 @@ use config::load_config;
 use services::print_job::job_checker_task;
 use services::printer::{get_all_printers, printer_checker_task};
 use services::websocket::websocket_task;
-use utils::tui::run_tui;
 use utils::printer_storage::{load_printers, save_printers};
+use utils::tui::run_tui;
 
 /// Command line arguments for the application
 #[derive(Parser)]
@@ -46,7 +46,7 @@ async fn main() -> std::io::Result<()> {
         .with_env_filter(
             EnvFilter::from_default_env()
                 .add_directive("reverb_rs=debug".parse().unwrap())
-                .add_directive("rust_spooler=debug".parse().unwrap())
+                .add_directive("rust_spooler=debug".parse().unwrap()),
         )
         .init();
     // Parse command line arguments
@@ -155,7 +155,7 @@ async fn run_server() -> std::io::Result<()> {
             .service(check_jobs_endpoint)
             .service(check_printers_endpoint)
     })
-        .bind(format!("0.0.0.0:{}", api_port))?;
+    .bind(format!("0.0.0.0:{}", api_port))?;
 
     api_server.run().await?;
 

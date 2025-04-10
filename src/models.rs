@@ -5,11 +5,11 @@ pub mod api;
 /// Configuration structure for the application
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
-    pub instance_name: String,        // Name for this printer server instance
-    pub printer_check_interval: u64,  // in minutes
-    pub job_check_interval: u64,      // in minutes
-    pub flux_url: String,             // Base URL for all API endpoints
-    pub flux_api_token: Option<String>,    // Authentication token for print jobs
+    pub instance_name: String,
+    pub printer_check_interval: u64,
+    pub job_check_interval: u64,
+    pub flux_url: String,
+    pub flux_api_token: Option<String>,
     pub api_port: u16,
     pub reverb_disabled: bool,
     pub reverb_app_id: String,
@@ -52,7 +52,7 @@ pub struct Printer {
     pub location: String,
     pub make_and_model: String,
     pub media_sizes: Vec<String>,
-    pub printer_id: Option<u32>,  // Added printer_id field
+    pub printer_id: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -85,7 +85,7 @@ pub struct PageLink {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct WebsocketPrintJob {
     pub printer_name: String,
-    pub spooler_name: String, // Changed from printer_server
+    pub spooler_name: String,
     pub media_id: String,
     pub job_id: Option<u32>,
 }
@@ -122,7 +122,7 @@ pub struct PrintJobPaginatedData {
 pub struct PrintJob {
     pub id: u32,
     pub media_id: u32,
-    pub printer_id: Option<u32>, // Changed from u32 to Option<u32>
+    pub printer_id: Option<u32>,
     pub user_id: Option<u32>,
     pub quantity: u32,
     pub size: String,

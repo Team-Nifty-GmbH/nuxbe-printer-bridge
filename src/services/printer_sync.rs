@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
 use reqwest::{Client, StatusCode};
+use std::collections::{HashMap, HashSet};
 
-use crate::models::{Config, Printer};
 use crate::models::api::{ApiPrinter, ApiPrinterResponse};
+use crate::models::{Config, Printer};
 
 /// Synchronize printers with the API server following the specified order
 pub async fn sync_printers_with_api(
@@ -29,7 +29,11 @@ pub async fn sync_printers_with_api(
     for (name, printer) in &mut updated_printers {
         if let Some(api_printer) = api_printer_map.get(name) {
             printer.printer_id = api_printer.id;
-            println!("Found existing printer in API: {} with ID {}", name, api_printer.id.unwrap_or(0));
+            println!(
+                "Found existing printer in API: {} with ID {}",
+                name,
+                api_printer.id.unwrap_or(0)
+            );
         } else if let Some(saved_printer) = saved_printers.get(name) {
             // If not in API but in saved, preserve existing ID
             printer.printer_id = saved_printer.printer_id;
@@ -42,10 +46,13 @@ pub async fn sync_printers_with_api(
             println!("Creating new printer in API: {}", name);
             match create_printer_in_api(printer, http_client, config).await {
                 Ok(new_printer) => {
-                    println!("Created printer {} in API with ID {}",
-                             new_printer.name, new_printer.printer_id.unwrap_or(0));
+                    println!(
+                        "Created printer {} in API with ID {}",
+                        new_printer.name,
+                        new_printer.printer_id.unwrap_or(0)
+                    );
                     *printer = new_printer.clone();
-                },
+                }
                 Err(e) => {
                     eprintln!("Failed to create printer {} in API: {}", name, e);
                 }
@@ -68,9 +75,12 @@ pub async fn sync_printers_with_api(
                 match delete_printer_from_api(id, http_client, config).await {
                     Ok(_) => {
                         println!("Deleted printer {} (ID: {}) from API", name, id);
-                    },
+                    }
                     Err(e) => {
-                        eprintln!("Failed to delete printer {} (ID: {}) from API: {}", name, id, e);
+                        eprintln!(
+                            "Failed to delete printer {} (ID: {}) from API: {}",
+                            name, id, e
+                        );
                     }
                 }
             }
@@ -88,7 +98,7 @@ pub async fn sync_printers_with_api(
                     match update_printer_in_api(printer, http_client, config).await {
                         Ok(_) => {
                             println!("Updated printer {} in API", name);
-                        },
+                        }
                         Err(e) => {
                             eprintln!("Failed to update printer {} in API: {}", name, e);
                         }
@@ -110,7 +120,13 @@ async fn fetch_printers_from_api(
 
     let response = http_client
         .get(&api_url)
-        .header("Authorization", format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&"".to_string())))
+        .header(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                config.flux_api_token.as_ref().unwrap_or(&"".to_string())
+            ),
+        )
         .header("Accept", "application/json")
         .json(&serde_json::json!({
             "instance_name": config.instance_name
@@ -142,7 +158,13 @@ async fn create_printer_in_api(
 
     let response = http_client
         .post(&api_url)
-        .header("Authorization", format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&"".to_string())))
+        .header(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                config.flux_api_token.as_ref().unwrap_or(&"".to_string())
+            ),
+        )
         .header("Accept", "application/json")
         .json(&api_printer)
         .send()
@@ -188,7 +210,13 @@ async fn update_printer_in_api(
 
     let response = http_client
         .put(&api_url)
-        .header("Authorization", format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&"".to_string())))
+        .header(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                config.flux_api_token.as_ref().unwrap_or(&"".to_string())
+            ),
+        )
         .header("Accept", "application/json")
         .json(&api_printer)
         .send()
@@ -214,7 +242,13 @@ async fn delete_printer_from_api(
 
     let response = http_client
         .delete(&api_url)
-        .header("Authorization", format!("Bearer {}", config.flux_api_token.as_ref().unwrap_or(&"".to_string())))
+        .header(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                config.flux_api_token.as_ref().unwrap_or(&"".to_string())
+            ),
+        )
         .header("Accept", "application/json")
         .json(&serde_json::json!({
             "spooler_name": config.instance_name // Changed from instance_name

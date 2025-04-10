@@ -1,5 +1,5 @@
-use std::fs;
 use crate::models::Config;
+use std::fs;
 
 /// Path to the config directory
 pub fn config_dir() -> std::path::PathBuf {

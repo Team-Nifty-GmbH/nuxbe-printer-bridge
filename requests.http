@@ -60,7 +60,7 @@ Accept: application/json
 Authorization: Bearer {{apiToken}}
 
 ### Get pending print jobs for specific spooler
-GET {{baseUrl}}/api/print-jobs?spooler_name={{spoolerName}}&is_completed=false
+GET {{baseUrl}}/api/print-jobs?filter[printer.spooler_name]={{spoolerName}}&filter[is_completed]=false
 Accept: application/json
 Authorization: Bearer {{apiToken}}
 
@@ -80,41 +80,19 @@ Authorization: Bearer {{apiToken}}
 }
 
 ### Mark a print job as completed
-PUT {{baseUrl}}/api/print-jobs/1
+PUT {{baseUrl}}/api/print-jobs
 Accept: application/json
 Content-Type: application/json
 Authorization: Bearer {{apiToken}}
 
 {
-  "is_completed": true,
-  "spooler_name": "{{spoolerName}}"
+  "id": 2,
+  "is_completed": false
 }
 
 ### Download a media file (for print jobs)
 GET {{baseUrl}}/api/media/private/5084
 Authorization: Bearer {{apiToken}}
-
-### Upload a new media file (for creating print jobs)
-# @name uploadMedia
-POST {{baseUrl}}/api/media
-Content-Type: multipart/form-data; boundary=WebAppBoundary
-Authorization: Bearer {{apiToken}}
-
---WebAppBoundary
-Content-Disposition: form-data; name="file"; filename="document.pdf"
-Content-Type: application/pdf
-
-< ./path/to/your/document.pdf
---WebAppBoundary--
-
-### Get Reverb authentication token
-# This would be used by the spooler to authenticate with Reverb
-POST {{baseUrl}}/broadcasting/auth
 Content-Type: application/json
-Accept: application/json
-Authorization: Bearer {{apiToken}}
-
-{
-  "socket_id": "12345.67890",
-  "channel_name": "private-FluxErp.Models.PrintJobs"
-}
+Accept: application/octet-stream
+Accept-Encoding: gzip, deflate

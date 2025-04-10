@@ -4,7 +4,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use actix_multipart::Multipart;
-use actix_web::{get, post, web, Error, HttpResponse, Responder};
+use actix_web::{Error, HttpResponse, Responder, get, post, web};
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Client;
 use tempfile::NamedTempFile;
@@ -111,7 +111,7 @@ pub async fn check_jobs_endpoint(
                 guard.flux_api_token = config_clone.flux_api_token;
             }
             HttpResponse::Ok().json(jobs)
-        },
+        }
         Err(e) => HttpResponse::InternalServerError().body(format!("Failed to check jobs: {}", e)),
     }
 }

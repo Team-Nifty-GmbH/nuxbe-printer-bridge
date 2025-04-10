@@ -1,4 +1,4 @@
-pub mod printer;
 pub mod print_job;
-pub mod websocket;
+pub mod printer;
 pub mod printer_sync;
+pub mod websocket;
