@@ -26,14 +26,14 @@ jobs:
           override: true
           target: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools and OpenSSL dependencies
+      - name: Install cross-compilation tools and setup cross
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
           sudo apt-get install -y libssl-dev pkg-config
-          # Install OpenSSL dev package for aarch64
-          sudo apt-get install -y libssl-dev:arm64
+          # Install cross tool for easier Rust cross-compilation
+          cargo install cross --force
 
       - name: Build binary for x86_64
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -44,16 +44,8 @@ jobs:
 
       - name: Build binary for aarch64
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        uses: actions-rs/cargo@v1
-        env:
-          PKG_CONFIG_ALLOW_CROSS: 1
-          OPENSSL_DIR: /usr
-          OPENSSL_LIB_DIR: /usr/lib/aarch64-linux-gnu
-          OPENSSL_INCLUDE_DIR: /usr/include
-        with:
-          command: build
-          args: --release --target ${{ matrix.target }}
-          use-cross: true
+        run: |
+          cross build --release --target ${{ matrix.target }}
 
       - name: Get application name from Cargo.toml
         id: get_name
@@ -73,7 +65,7 @@ jobs:
           fi
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: ${{ env.APP_NAME }}-${{ matrix.target }}
           path: release/*.tar.gz
