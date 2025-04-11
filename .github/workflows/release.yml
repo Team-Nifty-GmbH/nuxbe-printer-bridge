@@ -23,8 +23,8 @@ jobs:
           APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust Nightly
+        uses: dtolnay/rust-toolchain@nightly
         with:
           targets: x86_64-unknown-linux-gnu
 
@@ -75,7 +75,7 @@ jobs:
       - name: Create Dockerfile
         run: |
           cat > Dockerfile << 'EOF'
-          FROM --platform=linux/arm64 rust:1.77
+          FROM --platform=linux/arm64 rustlang/rust:nightly-slim
 
           # Install build dependencies
           RUN apt-get update && apt-get install -y libssl-dev pkg-config
