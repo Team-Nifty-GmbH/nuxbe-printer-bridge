@@ -1,0 +1,106 @@
+name: Build and Release Rust Application
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger the workflow when a tag is pushed that starts with 'v'
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu    # x64 Linux
+          - aarch64-unknown-linux-gnu   # ARM64 Linux
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build binary
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --target ${{ matrix.target }}
+          use-cross: ${{ matrix.target == 'aarch64-unknown-linux-gnu' }}
+
+      - name: Get application name from Cargo.toml
+        id: get_name
+        run: |
+          APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
+
+      - name: Package release
+        run: |
+          mkdir -p release
+          if [ "${{ matrix.target }}" == "x86_64-unknown-linux-gnu" ]; then
+            cp target/${{ matrix.target }}/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-x86_64-linux
+            tar -czf release/${{ env.APP_NAME }}-x86_64-linux.tar.gz -C release ${{ env.APP_NAME }}-x86_64-linux
+          else
+            cp target/${{ matrix.target }}/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-aarch64-linux
+            tar -czf release/${{ env.APP_NAME }}-aarch64-linux.tar.gz -C release ${{ env.APP_NAME }}-aarch64-linux
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.APP_NAME }}-${{ matrix.target }}
+          path: release/*.tar.gz
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get application name from Cargo.toml
+        id: get_name
+        run: |
+          APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Move artifacts to release directory
+        run: |
+          mkdir -p release
+          find artifacts -name "*.tar.gz" -exec cp {} release/ \;
+
+      - name: Extract tag name
+        id: tag
+        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: ${{ env.APP_NAME }} ${{ env.TAG_NAME }}
+          tag_name: ${{ env.TAG_NAME }}
+          draft: false
+          prerelease: false
+          files: |
+            release/${{ env.APP_NAME }}-x86_64-linux.tar.gz
+            release/${{ env.APP_NAME }}-aarch64-linux.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
