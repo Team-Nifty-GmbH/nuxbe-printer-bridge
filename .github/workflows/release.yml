@@ -66,11 +66,6 @@ jobs:
           APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          targets: aarch64-unknown-linux-gnu
-
       - name: Install Docker
         uses: docker/setup-buildx-action@v3
 
@@ -88,20 +83,22 @@ jobs:
               build-essential \
               pkg-config \
               libssl-dev \
-              git
+              git \
+              gcc-aarch64-linux-gnu \
+              g++-aarch64-linux-gnu \
+              libc6-dev-arm64-cross
+
+          # Install ARM64 OpenSSL
+          RUN dpkg --add-architecture arm64 && \
+              apt-get update && \
+              apt-get install -y libssl-dev:arm64
 
           # Install Rust
           RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly
           ENV PATH="/root/.cargo/bin:${PATH}"
-
+          
           # Add ARM64 target
           RUN rustup target add aarch64-unknown-linux-gnu
-
-          # Install cross-compilation tools
-          RUN apt-get install -y \
-              gcc-aarch64-linux-gnu \
-              g++-aarch64-linux-gnu \
-              libc6-dev-arm64-cross
 
           # Create build directory
           WORKDIR /build
@@ -122,9 +119,16 @@ jobs:
           cd /build
           
           # Configure environment for cross-compilation
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+          export PKG_CONFIG_SYSROOT_DIR=/
           export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
           export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
           export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+          export OPENSSL_DIR=/usr
+          export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
+          export OPENSSL_INCLUDE_DIR=/usr/include
+          export OPENSSL_STATIC=1
           
           # Build for ARM64
           cargo build --target aarch64-unknown-linux-gnu --release
@@ -133,15 +137,20 @@ jobs:
           chmod +x build-inside.sh
           
           # Run the build in the container
-          docker run --rm -v $(pwd):/src -v $(pwd)/build-inside.sh:/build-inside.sh rust-arm64-builder /build-inside.sh
-          
-          # Check if the binary was built
-          ls -la /build/target/aarch64-unknown-linux-gnu/release/ || echo "Build failed!"
+          docker run --rm -v $(pwd):/src -v $(pwd)/build-inside.sh:/build-inside.sh rust-arm64-builder bash /build-inside.sh
 
       - name: Package the binary
         run: |
           mkdir -p release
-          cp target/aarch64-unknown-linux-gnu/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-aarch64-linux
+          cp target/aarch64-unknown-linux-gnu/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-aarch64-linux || echo "Binary not found at expected location"
+          find . -name "${{ env.APP_NAME }}" -type f -executable
+          # If the standard path fails, try to locate the binary
+          if [ ! -f "release/${{ env.APP_NAME }}-aarch64-linux" ]; then
+            BINARY_PATH=$(find . -name "${{ env.APP_NAME }}" -type f -executable | grep aarch64 | head -n 1)
+            if [ -n "$BINARY_PATH" ]; then
+              cp "$BINARY_PATH" "release/${{ env.APP_NAME }}-aarch64-linux"
+            fi
+          fi
           tar -czf ${{ env.APP_NAME }}-aarch64-linux.tar.gz -C release ${{ env.APP_NAME }}-aarch64-linux
 
       - name: Upload artifact
