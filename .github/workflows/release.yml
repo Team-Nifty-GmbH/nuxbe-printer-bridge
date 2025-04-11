@@ -3,18 +3,12 @@ name: Build and Release Rust Application
 on:
   push:
     tags:
-      - 'v*' # Trigger the workflow when a tag is pushed that starts with 'v'
+      - 'v*' # Trigger on tags starting with 'v'
 
 jobs:
-  build:
-    name: Build and Release
+  build-x86_64:
+    name: Build x86_64 Linux
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - x86_64-unknown-linux-gnu    # x64 Linux
-          - aarch64-unknown-linux-gnu   # ARM64 Linux
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -23,29 +17,14 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+          target: x86_64-unknown-linux-gnu
           override: true
-          target: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools and setup cross
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          sudo apt-get install -y libssl-dev pkg-config
-          # Install cross tool for easier Rust cross-compilation
-          cargo install cross --force
-
-      - name: Build binary for x86_64
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+      - name: Build binary
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --release --target ${{ matrix.target }}
-
-      - name: Build binary for aarch64
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          cross build --release --target ${{ matrix.target }}
+          args: --release
 
       - name: Get application name from Cargo.toml
         id: get_name
@@ -56,24 +35,58 @@ jobs:
       - name: Package release
         run: |
           mkdir -p release
-          if [ "${{ matrix.target }}" == "x86_64-unknown-linux-gnu" ]; then
-            cp target/${{ matrix.target }}/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-x86_64-linux
-            tar -czf release/${{ env.APP_NAME }}-x86_64-linux.tar.gz -C release ${{ env.APP_NAME }}-x86_64-linux
-          else
-            cp target/${{ matrix.target }}/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-aarch64-linux
-            tar -czf release/${{ env.APP_NAME }}-aarch64-linux.tar.gz -C release ${{ env.APP_NAME }}-aarch64-linux
-          fi
+          cp target/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-x86_64-linux
+          tar -czf release/${{ env.APP_NAME }}-x86_64-linux.tar.gz -C release ${{ env.APP_NAME }}-x86_64-linux
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
-          name: ${{ env.APP_NAME }}-${{ matrix.target }}
+          name: ${{ env.APP_NAME }}-x86_64-linux
+          path: release/*.tar.gz
+          retention-days: 1
+
+  build-aarch64:
+    name: Build aarch64 Linux
+    runs-on: ubuntu-latest
+    container:
+      image: messense/rust-musl-cross:aarch64-musl
+      # This image already contains OpenSSL for ARM64 and properly configured toolchain
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install OpenSSL packages
+        run: |
+          apt-get update
+          apt-get install -y musl-dev libssl-dev pkg-config
+
+      - name: Configure environment
+        run: |
+          if [ -f Cargo.toml ]; then
+            APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
+            echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
+          fi
+
+      - name: Build for aarch64
+        run: |
+          cargo build --release --target aarch64-unknown-linux-musl
+
+      - name: Package release
+        run: |
+          mkdir -p release
+          cp target/aarch64-unknown-linux-musl/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-aarch64-linux
+          tar -czf release/${{ env.APP_NAME }}-aarch64-linux.tar.gz -C release ${{ env.APP_NAME }}-aarch64-linux
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.APP_NAME }}-aarch64-linux
           path: release/*.tar.gz
           retention-days: 1
 
   release:
     name: Create Release
-    needs: build
+    needs: [build-x86_64, build-aarch64]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -85,15 +98,23 @@ jobs:
           APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
 
-      - name: Download all artifacts
+      - name: Download x86_64 artifact
         uses: actions/download-artifact@v3
         with:
-          path: artifacts
+          name: ${{ env.APP_NAME }}-x86_64-linux
+          path: artifacts/x86_64
+
+      - name: Download aarch64 artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ env.APP_NAME }}-aarch64-linux
+          path: artifacts/aarch64
 
       - name: Move artifacts to release directory
         run: |
           mkdir -p release
-          find artifacts -name "*.tar.gz" -exec cp {} release/ \;
+          cp artifacts/x86_64/*.tar.gz release/
+          cp artifacts/aarch64/*.tar.gz release/
 
       - name: Extract tag name
         id: tag
