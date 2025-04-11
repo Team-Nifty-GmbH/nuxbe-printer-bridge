@@ -3,7 +3,6 @@ use std::io::Write;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use cursive::reexports::log::debug;
 use tempfile::NamedTempFile;
 use tokio::time;
 
