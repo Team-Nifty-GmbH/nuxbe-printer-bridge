@@ -7,24 +7,15 @@ on:
 
 jobs:
   build-x86_64:
-    name: Build x86_64 Linux
+    name: Build for x86_64-linux
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: x86_64-unknown-linux-gnu
-          override: true
-
-      - name: Build binary
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release
+      - name: Get the version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
 
       - name: Get application name from Cargo.toml
         id: get_name
@@ -32,60 +23,108 @@ jobs:
           APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
 
-      - name: Package release
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Build binary
+        run: cargo build --release
+
+      - name: Package the binary
         run: |
           mkdir -p release
           cp target/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-x86_64-linux
-          tar -czf release/${{ env.APP_NAME }}-x86_64-linux.tar.gz -C release ${{ env.APP_NAME }}-x86_64-linux
+          tar -czf ${{ env.APP_NAME }}-x86_64-linux.tar.gz -C release ${{ env.APP_NAME }}-x86_64-linux
 
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-x86_64-linux
-          path: release/*.tar.gz
+          name: ${{ env.APP_NAME }}-x86_64-linux.tar.gz
+          path: ${{ env.APP_NAME }}-x86_64-linux.tar.gz
           retention-days: 1
 
   build-aarch64:
-    name: Build aarch64 Linux
+    name: Build for aarch64-linux using QEMU
     runs-on: ubuntu-latest
-    container:
-      image: messense/rust-musl-cross:aarch64-musl
-      # This image already contains OpenSSL for ARM64 and properly configured toolchain
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install OpenSSL packages
-        run: |
-          apt-get update
-          apt-get install -y musl-dev libssl-dev pkg-config
-
-      - name: Configure environment
-        run: |
-          if [ -f Cargo.toml ]; then
-            APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
-            echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
-          fi
-
-      - name: Build for aarch64
-        run: |
-          cargo build --release --target aarch64-unknown-linux-musl
-
-      - name: Package release
-        run: |
-          mkdir -p release
-          cp target/aarch64-unknown-linux-musl/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-aarch64-linux
-          tar -czf release/${{ env.APP_NAME }}-aarch64-linux.tar.gz -C release ${{ env.APP_NAME }}-aarch64-linux
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
         with:
-          name: ${{ env.APP_NAME }}-aarch64-linux
-          path: release/*.tar.gz
+          platforms: arm64
+
+      - name: Get the version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Get application name from Cargo.toml
+        id: get_name
+        run: |
+          APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
+
+      # Create a Dockerfile for building the ARM64 binary
+      - name: Create Dockerfile
+        run: |
+          cat > Dockerfile << 'EOF'
+          FROM --platform=linux/arm64 rust:1.77
+
+          # Install build dependencies
+          RUN apt-get update && apt-get install -y libssl-dev pkg-config
+
+          # Create a new empty project
+          WORKDIR /app
+
+          # Copy your source code
+          COPY . .
+
+          # Build the project
+          RUN cargo build --release
+
+          # The binary will be in /app/target/release/
+          EOF
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ARM64 image with the app
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          tags: rust-builder:latest
+
+      # Extract the binary from the Docker image
+      - name: Extract binary from Docker image
+        run: |
+          mkdir -p extraction
+          # Create a container without running it
+          CONTAINER_ID=$(docker create --platform linux/arm64 rust-builder:latest)
+          # Copy the binary from the container
+          docker cp $CONTAINER_ID:/app/target/release/${{ env.APP_NAME }} extraction/${{ env.APP_NAME }}-aarch64-linux
+          # Remove the container
+          docker rm $CONTAINER_ID
+          # Create tarball
+          tar -czvf ${{ env.APP_NAME }}-aarch64-linux.tar.gz -C extraction ${{ env.APP_NAME }}-aarch64-linux
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.APP_NAME }}-aarch64-linux.tar.gz
+          path: ${{ env.APP_NAME }}-aarch64-linux.tar.gz
           retention-days: 1
 
-  release:
-    name: Create Release
+  create-release:
+    name: Create GitHub Release
     needs: [build-x86_64, build-aarch64]
     runs-on: ubuntu-latest
     steps:
@@ -98,38 +137,26 @@ jobs:
           APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
 
-      - name: Download x86_64 artifact
+      - name: Get the version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Download all artifacts
         uses: actions/download-artifact@v3
         with:
-          name: ${{ env.APP_NAME }}-x86_64-linux
-          path: artifacts/x86_64
+          path: artifacts
 
-      - name: Download aarch64 artifact
-        uses: actions/download-artifact@v3
-        with:
-          name: ${{ env.APP_NAME }}-aarch64-linux
-          path: artifacts/aarch64
-
-      - name: Move artifacts to release directory
+      - name: Prepare release files
         run: |
           mkdir -p release
-          cp artifacts/x86_64/*.tar.gz release/
-          cp artifacts/aarch64/*.tar.gz release/
+          find artifacts -name "*.tar.gz" -exec cp {} release/ \;
+          ls -la release/
 
-      - name: Extract tag name
-        id: tag
-        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-
-      - name: Create Release
-        id: create_release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          name: ${{ env.APP_NAME }} ${{ env.TAG_NAME }}
-          tag_name: ${{ env.TAG_NAME }}
-          draft: false
-          prerelease: false
+          name: ${{ env.APP_NAME }} ${{ env.VERSION }}
           files: |
-            release/${{ env.APP_NAME }}-x86_64-linux.tar.gz
-            release/${{ env.APP_NAME }}-aarch64-linux.tar.gz
+            release/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
