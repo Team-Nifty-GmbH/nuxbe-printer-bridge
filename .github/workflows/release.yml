@@ -71,41 +71,72 @@ jobs:
         with:
           targets: aarch64-unknown-linux-gnu
 
-      - name: Install ARM64 OpenSSL dependencies
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            libc6-dev-arm64-cross \
-            libssl-dev:arm64 \
-            pkg-config
+      - name: Install Docker
+        uses: docker/setup-buildx-action@v3
 
-      # Set up a Docker-based approach without requiring container actions
-      - name: Create Docker build script
+      - name: Create Dockerfile for ARM64 build
         run: |
-          cat > build-arm64.sh << 'EOF'
+          cat > Dockerfile.arm64 << 'EOF'
+          FROM ubuntu:22.04
+
+          # Set noninteractive installation
+          ENV DEBIAN_FRONTEND=noninteractive
+
+          # Install build dependencies
+          RUN apt-get update && apt-get install -y \
+              curl \
+              build-essential \
+              pkg-config \
+              libssl-dev \
+              git
+
+          # Install Rust
+          RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly
+          ENV PATH="/root/.cargo/bin:${PATH}"
+
+          # Add ARM64 target
+          RUN rustup target add aarch64-unknown-linux-gnu
+
+          # Install cross-compilation tools
+          RUN apt-get install -y \
+              gcc-aarch64-linux-gnu \
+              g++-aarch64-linux-gnu \
+              libc6-dev-arm64-cross
+
+          # Create build directory
+          WORKDIR /build
+          EOF
+
+      - name: Build and Extract ARM64 Binary
+        run: |
+          # Build Docker image
+          docker build -t rust-arm64-builder -f Dockerfile.arm64 .
+          
+          # Create a script to run inside the container
+          cat > build-inside.sh << 'EOF'
           #!/bin/bash
           set -ex
-
+          
+          # Copy source code
+          cp -r /src/* /build/
+          cd /build
+          
           # Configure environment for cross-compilation
-          export PKG_CONFIG_ALLOW_CROSS=1
           export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
           export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
           export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
-          export OPENSSL_DIR=/usr/include/aarch64-linux-gnu
-          export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
-          export OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu
-
+          
           # Build for ARM64
           cargo build --target aarch64-unknown-linux-gnu --release
           EOF
-
-          chmod +x build-arm64.sh
-
-      - name: Build for ARM64
-        run: ./build-arm64.sh
+          
+          chmod +x build-inside.sh
+          
+          # Run the build in the container
+          docker run --rm -v $(pwd):/src -v $(pwd)/build-inside.sh:/build-inside.sh rust-arm64-builder /build-inside.sh
+          
+          # Check if the binary was built
+          ls -la /build/target/aarch64-unknown-linux-gnu/release/ || echo "Build failed!"
 
       - name: Package the binary
         run: |
