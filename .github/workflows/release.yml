@@ -117,7 +117,7 @@ jobs:
           tar -czvf ${{ env.APP_NAME }}-aarch64-linux.tar.gz -C extraction ${{ env.APP_NAME }}-aarch64-linux
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APP_NAME }}-aarch64-linux.tar.gz
           path: ${{ env.APP_NAME }}-aarch64-linux.tar.gz
