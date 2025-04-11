@@ -12,17 +12,19 @@ use crate::services::printer_sync::sync_printers_with_api;
 use crate::utils::printer_storage::{load_printers, save_printers};
 
 /// Get all available printers from the CUPS system
-pub async fn get_all_printers() -> Vec<Printer> {
-    // Debug lpstat
-    let debug_output = Command::new("lpstat")
-        .arg("-a")
-        .output()
-        .expect("Failed to execute lpstat -a command");
+pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
+    // Debug lpstat only if verbose debug is enabled
+    if verbose_debug {
+        let debug_output = Command::new("lpstat")
+            .arg("-a")
+            .output()
+            .expect("Failed to execute lpstat -a command");
 
-    println!(
-        "Debug lpstat -a: {}",
-        String::from_utf8_lossy(&debug_output.stdout)
-    );
+        println!(
+            "Debug lpstat -a: {}",
+            String::from_utf8_lossy(&debug_output.stdout)
+        );
+    }
 
     let lpstat_output = Command::new("lpstat")
         .arg("-a")
@@ -49,10 +51,12 @@ pub async fn get_all_printers() -> Vec<Printer> {
             .output()
             .expect("Failed to execute lpstat -p command");
 
-        println!(
-            "Debug lpstat -p: {}",
-            String::from_utf8_lossy(&alt_output.stdout)
-        );
+        if verbose_debug {
+            println!(
+                "Debug lpstat -p: {}",
+                String::from_utf8_lossy(&alt_output.stdout)
+            );
+        }
 
         let alt_list_str = String::from_utf8_lossy(&alt_output.stdout);
         final_printer_names = alt_list_str
@@ -75,10 +79,12 @@ pub async fn get_all_printers() -> Vec<Printer> {
             .output()
             .expect("Failed to execute lpstat -v command");
 
-        println!(
-            "Debug lpstat -v: {}",
-            String::from_utf8_lossy(&v_output.stdout)
-        );
+        if verbose_debug {
+            println!(
+                "Debug lpstat -v: {}",
+                String::from_utf8_lossy(&v_output.stdout)
+            );
+        }
 
         let v_list_str = String::from_utf8_lossy(&v_output.stdout);
         final_printer_names = v_list_str
@@ -95,7 +101,9 @@ pub async fn get_all_printers() -> Vec<Printer> {
             .collect();
     }
 
-    println!("Detected printers: {:?}", final_printer_names);
+    if verbose_debug {
+        println!("Detected printers: {:?}", final_printer_names);
+    }
 
     let mut printers = Vec::new();
 
@@ -209,9 +217,10 @@ pub async fn check_for_new_printers(
     printers_data: web::Data<Arc<Mutex<HashSet<String>>>>,
     http_client: web::Data<Client>,
     config: web::Data<Arc<Mutex<Config>>>,
+    verbose_debug: bool,
 ) -> Result<Vec<Printer>, Box<dyn std::error::Error>> {
     // 1. Get current printers from CUPS
-    let current_printers = get_all_printers().await;
+    let current_printers = get_all_printers(verbose_debug).await;
 
     // 2. Load saved printers from printer.json
     let saved_printers = load_printers();
@@ -241,8 +250,9 @@ pub async fn check_for_new_printers(
         &saved_printers,
         &http_client,
         &config_clone,
+        verbose_debug,
     )
-    .await;
+        .await;
 
     let updated_printers = match sync_result {
         Ok(printers) => printers,
@@ -280,6 +290,7 @@ pub async fn printer_checker_task(
     printers_data: Arc<Mutex<HashSet<String>>>,
     config: Arc<Mutex<Config>>,
     http_client: Client,
+    verbose_debug: bool,
 ) {
     let printers_data = web::Data::new(printers_data);
     let config_data = web::Data::new(config);
@@ -290,8 +301,9 @@ pub async fn printer_checker_task(
         printers_data.clone(),
         client_data.clone(),
         config_data.clone(),
+        verbose_debug,
     )
-    .await
+        .await
     {
         Ok(new_printers) => {
             if !new_printers.is_empty() {
@@ -315,8 +327,9 @@ pub async fn printer_checker_task(
             printers_data.clone(),
             client_data.clone(),
             config_data.clone(),
+            verbose_debug,
         )
-        .await
+            .await
         {
             Ok(new_printers) => {
                 if !new_printers.is_empty() {

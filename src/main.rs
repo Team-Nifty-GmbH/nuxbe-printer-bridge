@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use actix_web::{App, HttpServer, web};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ArgAction};
 use local_ip_address::local_ip;
 use reqwest::Client;
 use tracing_subscriber::EnvFilter;
@@ -29,6 +29,10 @@ use utils::tui::run_tui;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// Enable verbose debug logging
+    #[arg(short = 'v', long = "verbose", action = ArgAction::Count)]
+    verbose: u8,
 }
 
 #[derive(Subcommand)]
@@ -42,15 +46,29 @@ enum Commands {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::from_default_env()
-                .add_directive("reverb_rs=debug".parse().unwrap())
-                .add_directive("rust_spooler=debug".parse().unwrap()),
-        )
-        .init();
     // Parse command line arguments
     let cli = Cli::parse();
+
+    // Configure logging based on verbosity level
+    let env_filter = match cli.verbose {
+        0 => EnvFilter::from_default_env()
+            .add_directive("reverb_rs=warn".parse().unwrap())
+            .add_directive("rust_spooler=info".parse().unwrap()),
+        1 => EnvFilter::from_default_env()
+            .add_directive("reverb_rs=info".parse().unwrap())
+            .add_directive("rust_spooler=info".parse().unwrap()),
+        2 => EnvFilter::from_default_env()
+            .add_directive("reverb_rs=debug".parse().unwrap())
+            .add_directive("rust_spooler=debug".parse().unwrap()),
+        _ => EnvFilter::from_default_env()
+            .add_directive("reverb_rs=trace".parse().unwrap())
+            .add_directive("rust_spooler=trace".parse().unwrap()),
+    };
+
+    // Initialize the tracing subscriber with the configured filter
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .init();
 
     // Handle subcommands
     match cli.command {
@@ -61,13 +79,13 @@ async fn main() -> std::io::Result<()> {
         }
         _ => {
             // Default: run the server
-            run_server().await
+            run_server(cli.verbose >= 3).await
         }
     }
 }
 
 /// Run the main server application
-async fn run_server() -> std::io::Result<()> {
+async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
     // Load configuration
     let config = Arc::new(Mutex::new(load_config()));
 
@@ -79,7 +97,7 @@ async fn run_server() -> std::io::Result<()> {
 
     // Initial population of printer set and ensure saved printers are up to date
     {
-        let system_printers = get_all_printers().await;
+        let system_printers = get_all_printers(verbose_debug).await;
         let mut set = printers_set.lock().unwrap();
 
         // Load saved printers
@@ -115,7 +133,7 @@ async fn run_server() -> std::io::Result<()> {
     let http_client_checker = http_client.clone();
 
     tokio::spawn(async move {
-        printer_checker_task(printers_set_clone, config_checker, http_client_checker).await;
+        printer_checker_task(printers_set_clone, config_checker, http_client_checker, verbose_debug).await;
     });
 
     // Spawn job checker task
@@ -150,12 +168,13 @@ async fn run_server() -> std::io::Result<()> {
             .app_data(web::Data::new(Arc::clone(&config)))
             .app_data(web::Data::new(Arc::clone(&printers_set)))
             .app_data(web::Data::new(http_client.clone()))
+            .app_data(web::Data::new(verbose_debug))
             .service(get_printers)
             .service(print_file)
             .service(check_jobs_endpoint)
             .service(check_printers_endpoint)
     })
-    .bind(format!("0.0.0.0:{}", api_port))?;
+        .bind(format!("0.0.0.0:{}", api_port))?;
 
     api_server.run().await?;
 

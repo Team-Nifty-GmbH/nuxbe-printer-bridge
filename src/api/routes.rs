@@ -16,7 +16,7 @@ use crate::utils::printer_storage::load_printers;
 
 /// GET /printers - List all available printers
 #[get("/printers")]
-pub async fn get_printers() -> impl Responder {
+pub async fn get_printers(verbose_debug: web::Data<bool>) -> impl Responder {
     // Load printers from storage first
     let saved_printers = load_printers();
 
@@ -27,7 +27,7 @@ pub async fn get_printers() -> impl Responder {
     }
 
     // Fallback to getting printers from the system
-    let printers = get_all_printers().await;
+    let printers = get_all_printers(**verbose_debug).await;
     HttpResponse::Ok().json(PrinterList { printers })
 }
 
@@ -36,6 +36,7 @@ pub async fn get_printers() -> impl Responder {
 pub async fn print_file(
     mut payload: Multipart,
     query: web::Query<PrintRequest>,
+    verbose_debug: web::Data<bool>,
 ) -> Result<HttpResponse, Error> {
     let printer_name = &query.printer;
 
@@ -56,7 +57,11 @@ pub async fn print_file(
 
         // Check if a filename exists
         if let Some(filename) = content_disposition.get_filename() {
-            let _filename_str = filename.to_string();
+            let filename_str = filename.to_string();
+
+            if **verbose_debug {
+                println!("Processing file upload: {}", filename_str);
+            }
 
             // Create a temporary file to store the uploaded content
             let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
@@ -69,6 +74,10 @@ pub async fn print_file(
 
             // Get path to temp file
             let temp_path = temp_file.path().to_str().unwrap();
+
+            if **verbose_debug {
+                println!("Printing file from temp path: {}", temp_path);
+            }
 
             // Print the file using lp command
             let output = Command::new("lp")
@@ -122,8 +131,9 @@ pub async fn check_printers_endpoint(
     printers_data: web::Data<Arc<Mutex<HashSet<String>>>>,
     config: web::Data<Arc<Mutex<Config>>>,
     http_client: web::Data<Client>,
+    verbose_debug: web::Data<bool>,
 ) -> impl Responder {
-    match check_for_new_printers(printers_data, http_client, config).await {
+    match check_for_new_printers(printers_data, http_client, config, **verbose_debug).await {
         Ok(_new_printers) => {
             // Return the updated list of printers
             let saved_printers = load_printers();

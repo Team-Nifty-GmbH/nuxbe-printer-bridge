@@ -141,13 +141,14 @@ async fn update_print_job_status(
 }
 
 /// Fetch print jobs from the API and process them
-// Also in the fetch_print_jobs function, update the JSON payload
 pub async fn fetch_print_jobs(
     http_client: &Client,
     config: &mut Config,
 ) -> Result<Vec<PrintJob>, Box<dyn std::error::Error>> {
     // Construct the URL for fetching print jobs
     let jobs_url = format!("{}/api/print-jobs?filter[printer.spooler_name]={}&filter[is_completed]=false", config.flux_url, config.instance_name);
+
+    println!("Fetching print jobs from URL: {}", jobs_url);
 
     let response = http_client
         .get(&jobs_url)
@@ -171,11 +172,53 @@ pub async fn fetch_print_jobs(
     }
 
     let response_text = response.text().await?;
-    debug!("Response from API: {}", response_text);
+
+    // Show full API response for debugging purposes
+    // println!("Full API response: {}", response_text);
+
+    // Try to parse as generic JSON first to see actual structure
+    // match serde_json::from_str::<serde_json::Value>(&response_text) {
+    //     Ok(json_value) => {
+    //         println!("Successfully parsed as generic JSON: {}",
+    //                  if json_value.is_object() { "object" }
+    //                  else if json_value.is_array() { "array" }
+    //                  else { "other" }
+    //         );
+    //     },
+    //     Err(e) => {
+    //         println!("Warning: Could not parse as generic JSON: {}", e);
+    //     }
+    // }
 
     let parsed_response: PrintJobResponse = match serde_json::from_str(&response_text) {
         Ok(parsed) => parsed,
         Err(e) => {
+            println!("JSON parse error: {}", e);
+            println!("Error location: {}", e.to_string());
+
+            // Try to provide more context about where the error occurred
+            if let Some(line_col) = e.to_string().find("at line") {
+                let error_context = &e.to_string()[line_col..];
+                println!("Error context: {}", error_context);
+
+                // Try to show the part of JSON where error occurred
+                if error_context.contains("line") && error_context.contains("column") {
+                    if let Ok(err_line) = error_context.split_whitespace().nth(2).unwrap_or("0").parse::<usize>() {
+                        if let Ok(err_col) = error_context.split_whitespace().nth(5).unwrap_or("0").parse::<usize>() {
+                            let lines: Vec<&str> = response_text.lines().collect();
+                            if err_line <= lines.len() {
+                                let line = lines[err_line - 1];
+                                println!("Problematic line: {}", line);
+                                if err_col <= line.len() {
+                                    let marker = " ".repeat(err_col - 1) + "^";
+                                    println!("Position: {}", marker);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             return Err(format!("Failed to parse API response: {}", e).into());
         }
     };
@@ -251,7 +294,7 @@ pub async fn fetch_print_jobs(
                 );
             }
         }
-    } else { 
+    } else {
         println!("No print jobs found for this instance.");
     }
     Ok(jobs)
@@ -342,7 +385,7 @@ async fn get_default_printer() -> String {
     }
 
     // Fallback to first available printer
-    let printers = crate::services::printer::get_all_printers().await;
+    let printers = crate::services::printer::get_all_printers(false).await;
     if !printers.is_empty() {
         return printers[0].name.clone();
     }

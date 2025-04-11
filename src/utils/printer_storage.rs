@@ -44,7 +44,7 @@ pub fn save_printers(printers: &HashMap<String, Printer>) {
             if let Err(e) = fs::write(&path, json) {
                 eprintln!("Failed to save printers file: {}", e);
             } else {
-                println!(
+                eprintln!(
                     "Successfully saved {} printers to {}",
                     printers.len(),
                     path.display()

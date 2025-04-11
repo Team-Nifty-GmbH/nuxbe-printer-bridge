@@ -10,6 +10,7 @@ pub async fn sync_printers_with_api(
     saved_printers: &HashMap<String, Printer>,
     http_client: &Client,
     config: &Config,
+    verbose_debug: bool,
 ) -> Result<HashMap<String, Printer>, Box<dyn std::error::Error>> {
     // 1. We already have local printers from CUPS
     // 2. We already loaded saved_printers from printer.json
@@ -17,7 +18,7 @@ pub async fn sync_printers_with_api(
     let mut updated_printers = local_printers.clone(); // Start with local printers
 
     // First, get the existing printers from the API
-    let api_printers = fetch_printers_from_api(http_client, config).await?;
+    let api_printers = fetch_printers_from_api(http_client, config, verbose_debug).await?;
 
     // Create a map of API printers by name
     let mut api_printer_map = HashMap::new();
@@ -29,11 +30,13 @@ pub async fn sync_printers_with_api(
     for (name, printer) in &mut updated_printers {
         if let Some(api_printer) = api_printer_map.get(name) {
             printer.printer_id = api_printer.id;
-            println!(
-                "Found existing printer in API: {} with ID {}",
-                name,
-                api_printer.id.unwrap_or(0)
-            );
+            if verbose_debug {
+                println!(
+                    "Found existing printer in API: {} with ID {}",
+                    name,
+                    api_printer.id.unwrap_or(0)
+                );
+            }
         } else if let Some(saved_printer) = saved_printers.get(name) {
             // If not in API but in saved, preserve existing ID
             printer.printer_id = saved_printer.printer_id;
@@ -43,14 +46,18 @@ pub async fn sync_printers_with_api(
     // 3. Create new printers that don't have IDs yet
     for (name, printer) in updated_printers.iter_mut() {
         if printer.printer_id.is_none() {
-            println!("Creating new printer in API: {}", name);
-            match create_printer_in_api(printer, http_client, config).await {
+            if verbose_debug {
+                println!("Creating new printer in API: {}", name);
+            }
+            match create_printer_in_api(printer, http_client, config, verbose_debug).await {
                 Ok(new_printer) => {
-                    println!(
-                        "Created printer {} in API with ID {}",
-                        new_printer.name,
-                        new_printer.printer_id.unwrap_or(0)
-                    );
+                    if verbose_debug {
+                        println!(
+                            "Created printer {} in API with ID {}",
+                            new_printer.name,
+                            new_printer.printer_id.unwrap_or(0)
+                        );
+                    }
                     *printer = new_printer.clone();
                 }
                 Err(e) => {
@@ -72,9 +79,11 @@ pub async fn sync_printers_with_api(
         if let Some(printer) = saved_printers.get(name) {
             if let Some(id) = printer.printer_id {
                 // Delete from API
-                match delete_printer_from_api(id, http_client, config).await {
+                match delete_printer_from_api(id, http_client, config, verbose_debug).await {
                     Ok(_) => {
-                        println!("Deleted printer {} (ID: {}) from API", name, id);
+                        if verbose_debug {
+                            println!("Deleted printer {} (ID: {}) from API", name, id);
+                        }
                     }
                     Err(e) => {
                         eprintln!(
@@ -94,10 +103,14 @@ pub async fn sync_printers_with_api(
             if saved_printer.printer_id.is_some() && *local_printer != *saved_printer {
                 // Get the updated printer from our map
                 if let Some(printer) = updated_printers.get_mut(name) {
-                    println!("Updating printer {} in API", name);
-                    match update_printer_in_api(printer, http_client, config).await {
+                    if verbose_debug {
+                        println!("Updating printer {} in API", name);
+                    }
+                    match update_printer_in_api(printer, http_client, config, verbose_debug).await {
                         Ok(_) => {
-                            println!("Updated printer {} in API", name);
+                            if verbose_debug {
+                                println!("Updated printer {} in API", name);
+                            }
                         }
                         Err(e) => {
                             eprintln!("Failed to update printer {} in API: {}", name, e);
@@ -115,6 +128,7 @@ pub async fn sync_printers_with_api(
 async fn fetch_printers_from_api(
     http_client: &Client,
     config: &Config,
+    verbose_debug: bool,
 ) -> Result<Vec<ApiPrinter>, Box<dyn std::error::Error>> {
     let api_url = format!("{}/api/printers", config.flux_url);
 
@@ -139,7 +153,9 @@ async fn fetch_printers_from_api(
     }
 
     let response_text = response.text().await?;
-    println!("API response: {}", response_text);
+    if verbose_debug {
+        println!("API response: {}", response_text);
+    }
 
     let parsed_response: ApiPrinterResponse = serde_json::from_str(&response_text)?;
     Ok(parsed_response.data.data)
@@ -149,6 +165,7 @@ async fn create_printer_in_api(
     printer: &Printer,
     http_client: &Client,
     config: &Config,
+    verbose_debug: bool,
 ) -> Result<Printer, Box<dyn std::error::Error>> {
     let api_url = format!("{}/api/printers", config.flux_url);
 
@@ -177,6 +194,10 @@ async fn create_printer_in_api(
     }
 
     let response_text = response.text().await?;
+    if verbose_debug {
+        println!("API create response: {}", response_text);
+    }
+
     let response_data: serde_json::Value = serde_json::from_str(&response_text)?;
 
     // Extract the new printer ID
@@ -191,11 +212,11 @@ async fn create_printer_in_api(
     Ok(new_printer)
 }
 
-// Also update the update_printer_in_api function
 async fn update_printer_in_api(
     printer: &Printer,
     http_client: &Client,
     config: &Config,
+    verbose_debug: bool,
 ) -> Result<Printer, Box<dyn std::error::Error>> {
     if printer.printer_id.is_none() {
         return Err("Cannot update printer without an ID".into());
@@ -228,15 +249,20 @@ async fn update_printer_in_api(
         return Err(format!("Failed to update printer: {} - {}", status, error_text).into());
     }
 
+    if verbose_debug {
+        let response_text = response.text().await?;
+        println!("API update response: {}", response_text);
+    }
+
     // Return the updated printer
     Ok(printer.clone())
 }
 
-// For delete_printer_from_api, also update the JSON payload to include spooler_name instead of instance_name
 async fn delete_printer_from_api(
     printer_id: u32,
     http_client: &Client,
     config: &Config,
+    verbose_debug: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let api_url = format!("{}/api/printers/{}", config.flux_url, printer_id);
 
@@ -260,6 +286,10 @@ async fn delete_printer_from_api(
         let status = response.status(); // Save the status before consuming the response
         let error_text = response.text().await?;
         return Err(format!("Failed to delete printer: {} - {}", status, error_text).into());
+    }
+
+    if verbose_debug {
+        println!("Successfully deleted printer with ID: {}", printer_id);
     }
 
     Ok(())

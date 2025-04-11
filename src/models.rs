@@ -106,7 +106,7 @@ pub struct PrintJobPaginatedData {
     pub current_page: u32,
     pub data: Vec<PrintJob>,
     pub first_page_url: String,
-    pub from: u32,
+    pub from: Option<u32>,
     pub last_page: u32,
     pub last_page_url: String,
     pub links: Vec<PageLink>,
@@ -114,7 +114,7 @@ pub struct PrintJobPaginatedData {
     pub path: String,
     pub per_page: u32,
     pub prev_page_url: Option<String>,
-    pub to: u32,
+    pub to: Option<u32>,
     pub total: u32,
 }
 
