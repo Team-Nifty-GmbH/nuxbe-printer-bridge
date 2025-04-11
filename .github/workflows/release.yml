@@ -52,6 +52,8 @@ jobs:
   build-aarch64:
     name: Build for aarch64-linux
     runs-on: ubuntu-latest
+    container:
+      image: rustembedded/cross:aarch64-unknown-linux-gnu
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -66,23 +68,28 @@ jobs:
           APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
 
-      - name: Setup Rust toolchain
+      - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
           targets: aarch64-unknown-linux-gnu
 
-      - name: Install cross-compilation dependencies
+      - name: Build binary
+        env:
+          PKG_CONFIG_ALLOW_CROSS: 1
+          OPENSSL_DIR: /usr/aarch64-linux-gnu
+          OPENSSL_LIB_DIR: /usr/lib/aarch64-linux-gnu
+          OPENSSL_INCLUDE_DIR: /usr/include/aarch64-linux-gnu
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross libssl-dev pkg-config
-
-      - name: Build binary with cross
-        run: |
-          # Install cross tool for easier cross-compilation
-          cargo install cross --git https://github.com/cross-rs/cross
+          # Install required packages for cross-compiling with OpenSSL
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross \
+            libssl-dev:arm64 \
+            pkg-config
           
-          # Build using cross
-          cross build --target aarch64-unknown-linux-gnu --release
+          # Build for ARM64
+          cargo build --target aarch64-unknown-linux-gnu --release
 
       - name: Package the binary
         run: |
