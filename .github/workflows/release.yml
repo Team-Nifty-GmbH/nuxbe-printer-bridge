@@ -52,8 +52,6 @@ jobs:
   build-aarch64:
     name: Build for aarch64-linux
     runs-on: ubuntu-latest
-    container:
-      image: rustembedded/cross:aarch64-unknown-linux-gnu
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -68,28 +66,46 @@ jobs:
           APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
 
-      - name: Install Rust nightly
+      - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@nightly
         with:
           targets: aarch64-unknown-linux-gnu
 
-      - name: Build binary
-        env:
-          PKG_CONFIG_ALLOW_CROSS: 1
-          OPENSSL_DIR: /usr/aarch64-linux-gnu
-          OPENSSL_LIB_DIR: /usr/lib/aarch64-linux-gnu
-          OPENSSL_INCLUDE_DIR: /usr/include/aarch64-linux-gnu
+      - name: Install ARM64 OpenSSL dependencies
         run: |
-          # Install required packages for cross-compiling with OpenSSL
-          apt-get update
-          apt-get install -y --no-install-recommends \
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
             libc6-dev-arm64-cross \
             libssl-dev:arm64 \
             pkg-config
-          
+
+      # Set up a Docker-based approach without requiring container actions
+      - name: Create Docker build script
+        run: |
+          cat > build-arm64.sh << 'EOF'
+          #!/bin/bash
+          set -ex
+
+          # Configure environment for cross-compilation
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+          export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+          export OPENSSL_DIR=/usr/include/aarch64-linux-gnu
+          export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
+          export OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu
+
           # Build for ARM64
           cargo build --target aarch64-unknown-linux-gnu --release
+          EOF
+
+          chmod +x build-arm64.sh
+
+      - name: Build for ARM64
+        run: ./build-arm64.sh
 
       - name: Package the binary
         run: |
