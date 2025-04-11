@@ -2201,6 +2201,7 @@ dependencies = [
 [[package]]
 name = "reverb-rs"
 version = "0.1.0"
+source = "git+https://github.com/Team-Nifty-GmbH/reverb_rs?branch=main#3b3ea5c88179b257a021551840c336f1f0dcff88"
 dependencies = [
  "async-trait",
  "futures-util",
