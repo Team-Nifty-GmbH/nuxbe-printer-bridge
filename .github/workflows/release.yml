@@ -75,7 +75,7 @@ jobs:
       - name: Create Dockerfile
         run: |
           cat > Dockerfile << 'EOF'
-          FROM --platform=linux/arm64 rustlang/rust:nightly-slim
+          FROM --platform=linux/arm64 rustlang/rust:latest
 
           # Install build dependencies
           RUN apt-get update && apt-get install -y libssl-dev pkg-config
