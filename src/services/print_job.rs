@@ -147,7 +147,7 @@ pub async fn fetch_print_jobs(
     // Construct the URL for fetching print jobs
     let jobs_url = format!("{}/api/print-jobs?filter[printer.spooler_name]={}&filter[is_completed]=false", config.flux_url, config.instance_name);
 
-    println!("Fetching print jobs from URL: {}", jobs_url);
+    //println!("Fetching print jobs from URL: {}", jobs_url);
 
     let response = http_client
         .get(&jobs_url)

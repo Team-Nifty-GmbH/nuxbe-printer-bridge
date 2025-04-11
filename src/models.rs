@@ -29,7 +29,7 @@ impl Default for Config {
             flux_url: "http://example.com".to_string(),
             flux_api_token: None,
             api_port: 8080,
-            reverb_disabled: false,
+            reverb_disabled: true,
             reverb_app_id: "default-app-id".to_string(),
             reverb_app_key: "default-app-key".to_string(),
             reverb_app_secret: "default-app-secret".to_string(),

@@ -47,7 +47,7 @@ fn create_config_dialog(siv: &mut Cursive, config: Arc<Mutex<Config>>) {
                         TextView::new(
                             "Changes will be applied after saving and restarting the server.",
                         )
-                        .h_align(HAlign::Center),
+                            .h_align(HAlign::Center),
                     ),
             )
             .button("Save", move |s| {
@@ -78,7 +78,7 @@ fn create_server_settings(config: &Config) -> impl View {
                         .with_name("api_port"),
                 ),
         )
-        .title("Server Settings"),
+            .title("Server Settings"),
     )
 }
 
@@ -101,12 +101,15 @@ fn create_interval_settings(config: &Config) -> impl View {
                         .with_name("job_check_interval"),
                 ),
         )
-        .title("Polling Intervals"),
+            .title("Polling Intervals"),
     )
 }
 
 /// Create API settings section
 fn create_api_settings(config: &Config) -> impl View {
+    // Safely get the API token string or use empty string if None
+    let token_value = config.flux_api_token.clone().unwrap_or_default();
+
     PaddedView::new(
         Margins::lrtb(1, 1, 0, 1),
         Dialog::around(
@@ -120,11 +123,11 @@ fn create_api_settings(config: &Config) -> impl View {
                 .child(TextView::new("Flux Api Token:"))
                 .child(
                     EditView::new()
-                        .content(config.flux_api_token.clone().unwrap())
+                        .content(token_value)
                         .with_name("flux_api_token"),
                 ),
         )
-        .title("API Integration"),
+            .title("API Integration"),
     )
 }
 
@@ -170,9 +173,13 @@ fn create_reverb_settings(config: &Config) -> impl View {
     );
 
     layout.add_child(TextView::new("Reverb Host"));
+
+    // Safely get the host string or use empty string if None
+    let host_value = config.reverb_host.clone().unwrap_or_default();
+
     layout.add_child(
         EditView::new()
-            .content(config.reverb_host.clone().unwrap_or_default())
+            .content(host_value)
             .with_name("reverb_host"),
     );
 
@@ -224,12 +231,18 @@ fn save_config_from_ui(s: &mut Cursive, config: Arc<Mutex<Config>>) {
         })
         .unwrap_or_default();
 
-    config_guard.flux_api_token = Option::from(
-        s.call_on_name("flux_api_token", |view: &mut EditView| {
+    // Get the API token, but store it as None if it's empty
+    let api_token = s
+        .call_on_name("flux_api_token", |view: &mut EditView| {
             view.get_content().to_string()
         })
-        .unwrap_or_default(),
-    );
+        .unwrap_or_default();
+
+    config_guard.flux_api_token = if api_token.is_empty() {
+        None
+    } else {
+        Some(api_token)
+    };
 
     config_guard.reverb_disabled = s
         .call_on_name("reverb_disabled", |view: &mut Checkbox| view.is_checked())
