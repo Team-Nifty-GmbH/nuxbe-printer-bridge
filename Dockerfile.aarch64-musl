@@ -1,0 +1,19 @@
+FROM ghcr.io/cross-rs/aarch64-unknown-linux-musl:latest
+
+RUN apt-get update && \
+    apt-get install -y pkg-config libssl-dev musl-dev wget && \
+    mkdir -p /musl && \
+    cd /musl && \
+    wget https://www.openssl.org/source/openssl-3.1.5.tar.gz && \
+    tar xzf openssl-3.1.5.tar.gz && \
+    cd openssl-3.1.5 && \
+    ./Configure no-shared no-async --cross-compile-prefix=aarch64-linux-musl- --prefix=/usr/local/musl --openssldir=/usr/local/musl linux-aarch64 && \
+    make -j$(nproc) && \
+    make install_sw && \
+    cd .. && \
+    rm -rf openssl-3.1.5.tar.gz openssl-3.1.5
+
+ENV OPENSSL_DIR=/usr/local/musl \
+    OPENSSL_INCLUDE_DIR=/usr/local/musl/include \
+    OPENSSL_LIB_DIR=/usr/local/musl/lib \
+    PKG_CONFIG_ALLOW_CROSS=1
