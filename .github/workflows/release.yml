@@ -6,17 +6,52 @@ on:
       - 'v*' # Trigger on tags starting with 'v'
 
 jobs:
-  build-linux:
-    name: Build for ${{ matrix.target }}
+  build-x86_64:
+    name: Build for x86_64-linux
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
-        include:
-          - target: x86_64-unknown-linux-musl
-            arch: x86_64
-          - target: aarch64-unknown-linux-musl
-            arch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get the version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Get application name from Cargo.toml
+        id: get_name
+        run: |
+          APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
+
+      - name: Setup Rust Nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Build binary
+        run: cargo build --release
+
+      - name: Package the binary
+        run: |
+          mkdir -p release
+          cp target/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-x86_64-linux
+          tar -czf ${{ env.APP_NAME }}-x86_64-linux.tar.gz -C release ${{ env.APP_NAME }}-x86_64-linux
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-x86_64-linux.tar.gz
+          path: ${{ env.APP_NAME }}-x86_64-linux.tar.gz
+          retention-days: 1
+
+  build-arm64:
+    name: Build for arm64-linux
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -38,11 +73,9 @@ jobs:
         run: |
           cargo install cross --git https://github.com/cross-rs/cross
 
-      # Create custom Dockerfile for aarch64 if needed
-      - name: Create aarch64 Dockerfile if needed
-        if: matrix.target == 'aarch64-unknown-linux-musl'
+      # Create custom Dockerfile for aarch64
+      - name: Create aarch64 Dockerfile
         run: |
-          # Create Dockerfile.aarch64-musl if it doesn't exist
           cat > Dockerfile.aarch64-musl << EOF
           FROM ghcr.io/cross-rs/aarch64-unknown-linux-musl:latest
 
@@ -65,126 +98,34 @@ jobs:
               PKG_CONFIG_ALLOW_CROSS=1
           EOF
 
-      # Create Cross.toml if needed
-      - name: Create Cross.toml if needed
+      # Create Cross.toml
+      - name: Create Cross.toml
         run: |
-          if [ ! -f Cross.toml ]; then
-            cat > Cross.toml << EOF
-          [build]
-          default-target = "x86_64-unknown-linux-musl"
-
+          cat > Cross.toml << EOF
           [target.aarch64-unknown-linux-musl]
           dockerfile = "Dockerfile.aarch64-musl"
-
-          [target.x86_64-unknown-linux-musl]
-          image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:latest"
-          pre-build = [
-              "apt-get update",
-              "apt-get install -y pkg-config libssl-dev musl-dev"
-          ]
           EOF
-          fi
 
-      - name: Build binary
+      - name: Build binary for ARM64
         run: |
-          cross build --release --target ${{ matrix.target }}
+          cross build --release --target aarch64-unknown-linux-musl
 
       - name: Package the binary
         run: |
           mkdir -p release
-          cp target/${{ matrix.target }}/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-${{ matrix.arch }}-linux
-          tar -czf ${{ env.APP_NAME }}-${{ matrix.arch }}-linux.tar.gz -C release ${{ env.APP_NAME }}-${{ matrix.arch }}-linux
+          cp target/aarch64-unknown-linux-musl/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-arm64-linux
+          tar -czf ${{ env.APP_NAME }}-arm64-linux.tar.gz -C release ${{ env.APP_NAME }}-arm64-linux
 
-      # Create Debian package
-      - name: Create Debian package
-        run: |
-          # Create debian package structure
-          mkdir -p debian/DEBIAN
-          mkdir -p debian/usr/bin
-          
-          # Create control file
-          cat > debian/DEBIAN/control << EOF
-          Package: ${{ env.APP_NAME }}
-          Version: ${VERSION#v}
-          Section: utils
-          Priority: optional
-          Architecture: ${{ matrix.arch }}
-          Maintainer: Martin Slupski <mail@slupi.com>
-          Description: ${{ env.APP_NAME }} application
-           A Rust application built and packaged for ${{ matrix.arch }}.
-          EOF
-          
-          # Copy binary to package
-          cp target/${{ matrix.target }}/release/${{ env.APP_NAME }} debian/usr/bin/
-          
-          # Build the package
-          dpkg-deb --build debian "${{ env.APP_NAME }}_${VERSION#v}_${{ matrix.arch }}.deb"
-
-      - name: Upload tarball artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-${{ matrix.arch }}-linux.tar.gz
-          path: ${{ env.APP_NAME }}-${{ matrix.arch }}-linux.tar.gz
-          retention-days: 1
-
-      - name: Upload deb artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.APP_NAME }}_${VERSION#v}_${{ matrix.arch }}.deb
-          path: ${{ env.APP_NAME }}_${VERSION#v}_${{ matrix.arch }}.deb
-          retention-days: 1
-
-  create-apt-repo:
-    name: Create APT Repository
-    needs: [build-linux]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Get application name from Cargo.toml
-        id: get_name
-        run: |
-          APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
-          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
-
-      - name: Get the version
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Setup APT repository
-        run: |
-          # Create repository structure
-          mkdir -p apt-repo/pool/main/${{ env.APP_NAME }}
-          
-          # Copy .deb files to pool
-          find artifacts -name "*.deb" -exec cp {} apt-repo/pool/main/${{ env.APP_NAME }}/ \;
-          
-          # Generate package index
-          cd apt-repo
-          apt-ftparchive packages pool/main > Packages
-          gzip -k Packages
-          apt-ftparchive release . > Release
-          
-          # Create a tarball of the APT repository
-          cd ..
-          tar -czvf apt-repo.tar.gz apt-repo
-
-      - name: Upload APT repository
-        uses: actions/upload-artifact@v4
-        with:
-          name: apt-repo.tar.gz
-          path: apt-repo.tar.gz
+          name: ${{ env.APP_NAME }}-arm64-linux.tar.gz
+          path: ${{ env.APP_NAME }}-arm64-linux.tar.gz
           retention-days: 1
 
   create-release:
     name: Create GitHub Release
-    needs: [build-linux, create-apt-repo]
+    needs: [build-x86_64, build-arm64]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -208,7 +149,7 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          find artifacts -name "*.tar.gz" -o -name "*.deb" -exec cp {} release/ \;
+          find artifacts -name "*.tar.gz" -exec cp {} release/ \;
           ls -la release/
 
       - name: Create GitHub Release
@@ -217,6 +158,5 @@ jobs:
           name: ${{ env.APP_NAME }} ${{ env.VERSION }}
           files: |
             release/*.tar.gz
-            release/*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
