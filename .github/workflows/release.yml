@@ -11,11 +11,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
         include:
-          - target: x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-musl
             arch: x86_64
-          - target: aarch64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
             arch: arm64
     steps:
       - name: Checkout code
@@ -31,30 +31,63 @@ jobs:
           APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
 
-      - name: Setup Rust Nightly
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          targets: ${{ matrix.target }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Install dependencies
+      - name: Install cross
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config
+          cargo install cross --git https://github.com/cross-rs/cross
 
-      # Required for arm64 cross-compilation
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      # Create custom Dockerfile for aarch64 if needed
+      - name: Create aarch64 Dockerfile if needed
+        if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          # Create Dockerfile.aarch64-musl if it doesn't exist
+          cat > Dockerfile.aarch64-musl << EOF
+          FROM ghcr.io/cross-rs/aarch64-unknown-linux-musl:latest
+
+          RUN apt-get update && \\
+              apt-get install -y pkg-config libssl-dev musl-dev wget && \\
+              mkdir -p /musl && \\
+              cd /musl && \\
+              wget https://www.openssl.org/source/openssl-3.1.5.tar.gz && \\
+              tar xzf openssl-3.1.5.tar.gz && \\
+              cd openssl-3.1.5 && \\
+              ./Configure no-shared no-async --cross-compile-prefix=aarch64-linux-musl- --prefix=/usr/local/musl --openssldir=/usr/local/musl linux-aarch64 && \\
+              make -j\$(nproc) && \\
+              make install_sw && \\
+              cd .. && \\
+              rm -rf openssl-3.1.5.tar.gz openssl-3.1.5
+
+          ENV OPENSSL_DIR=/usr/local/musl \\
+              OPENSSL_INCLUDE_DIR=/usr/local/musl/include \\
+              OPENSSL_LIB_DIR=/usr/local/musl/lib \\
+              PKG_CONFIG_ALLOW_CROSS=1
+          EOF
+
+      # Create Cross.toml if needed
+      - name: Create Cross.toml if needed
+        run: |
+          if [ ! -f Cross.toml ]; then
+            cat > Cross.toml << EOF
+          [build]
+          default-target = "x86_64-unknown-linux-musl"
+
+          [target.aarch64-unknown-linux-musl]
+          dockerfile = "Dockerfile.aarch64-musl"
+
+          [target.x86_64-unknown-linux-musl]
+          image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:latest"
+          pre-build = [
+              "apt-get update",
+              "apt-get install -y pkg-config libssl-dev musl-dev"
+          ]
+          EOF
+          fi
 
       - name: Build binary
         run: |
-          # Set environment variables for cross-compilation
-          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
-            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-          fi
-          
-          cross cargo build --release --target ${{ matrix.target }}
+          cross build --release --target ${{ matrix.target }}
 
       - name: Package the binary
         run: |
@@ -137,10 +170,6 @@ jobs:
           apt-ftparchive packages pool/main > Packages
           gzip -k Packages
           apt-ftparchive release . > Release
-          
-          # Optional: Sign the repository (uses a dummy key here)
-          # In production, you'll want to use a proper GPG key
-          # gpg --armor --detach-sign --output Release.gpg Release
           
           # Create a tarball of the APT repository
           cd ..
