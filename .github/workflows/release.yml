@@ -1,177 +1,122 @@
-name: Build and Release Rust Application
+name: Release
 
 on:
   push:
     tags:
-      - 'v*' # Trigger on tags starting with 'v'
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  DEBIAN_FRONTEND: noninteractive
 
 jobs:
-  build-x86_64:
-    name: Build for x86_64-linux
+  build:
+    name: Build Release
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Get the version
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-
-      - name: Get application name from Cargo.toml
-        id: get_name
-        run: |
-          APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
-          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      # Install Rust with the correct PATH setup
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
         with:
-          targets: x86_64-unknown-linux-gnu
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+          profile: minimal
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config
-
-      - name: Build binary
-        run: cargo build --release
-
-      - name: Package the binary
-        run: |
-          mkdir -p release
-          cp target/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-x86_64-linux
-          tar -czf ${{ env.APP_NAME }}-x86_64-linux.tar.gz -C release ${{ env.APP_NAME }}-x86_64-linux
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.APP_NAME }}-x86_64-linux.tar.gz
-          path: ${{ env.APP_NAME }}-x86_64-linux.tar.gz
-          retention-days: 1
-
-  build-arm64:
-    name: Build for arm64-linux
-    runs-on: ubuntu-latest
-    timeout-minutes: 60  # Increase timeout for ARM64 build
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Get the version
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-
-      - name: Get application name from Cargo.toml
-        id: get_name
-        run: |
-          APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
-          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
+      # We'll use cargo-cross directly from crates.io which should handle the PATH correctly
       - name: Install cross
         run: |
-          cargo install cross --git https://github.com/cross-rs/cross
+          cargo install cross --version 0.2.5
 
-      # Create custom Dockerfile for aarch64
-      - name: Create aarch64 Dockerfile
+      # Create a Dockerfile with proper non-interactive setup for the musl packages
+      - name: Create Docker configuration
         run: |
-          cat > Dockerfile.aarch64-musl << EOF
+          mkdir -p .cargo
+          # Create a Cross.toml file that handles the non-interactive setup properly
+          cat > Cross.toml << 'EOF'
+          [target.${{ matrix.target }}]
+          pre-build = [
+              "export DEBIAN_FRONTEND=noninteractive",
+              "apt-get update",
+              "apt-get install -y -q --no-install-recommends pkg-config libssl-dev musl-dev",
+              "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
+          ]
+          EOF
+
+          # For aarch64 target, add a custom Dockerfile
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
+            cat > Dockerfile.aarch64-musl << 'EOF'
           FROM ghcr.io/cross-rs/aarch64-unknown-linux-musl:latest
-
-          # Pre-install dependencies to speed up the build
-          RUN apt-get update && \\
-              apt-get install -y pkg-config libssl-dev musl-dev wget && \\
-              mkdir -p /usr/local/musl
-
-          # Use a cache mount to speed up the build
-          RUN --mount=type=cache,target=/var/cache/apt \\
-              apt-get update && apt-get install -y build-essential
-
-          # Only build the parts of OpenSSL we actually need
-          RUN mkdir -p /musl && \\
-              cd /musl && \\
-              wget https://www.openssl.org/source/openssl-3.1.5.tar.gz && \\
-              tar xzf openssl-3.1.5.tar.gz && \\
-              cd openssl-3.1.5 && \\
-              ./Configure no-shared no-async no-tests no-unit-test \\
-                      no-fuzz-libfuzzer no-fuzz-afl no-ssl-trace \\
-                      no-sock --cross-compile-prefix=aarch64-linux-musl- \\
-                      --prefix=/usr/local/musl --openssldir=/usr/local/musl \\
-                      linux-aarch64 -Wl,-O1 && \\
-              make -j\$(nproc) build_sw && \\
-              make install_sw && \\
-              cd .. && \\
-              rm -rf openssl-3.1.5.tar.gz openssl-3.1.5
-
-          ENV OPENSSL_DIR=/usr/local/musl \\
-              OPENSSL_INCLUDE_DIR=/usr/local/musl/include \\
-              OPENSSL_LIB_DIR=/usr/local/musl/lib \\
-              PKG_CONFIG_ALLOW_CROSS=1
+          ENV DEBIAN_FRONTEND=noninteractive
+          RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections && \
+              apt-get update && \
+              apt-get install -y -q --no-install-recommends pkg-config libssl-dev musl-dev && \
+              rm -rf /var/lib/apt/lists/*
           EOF
+          fi
 
-      # Create Cross.toml
-      - name: Create Cross.toml
+      # Build the binary with cargo directly (for debugging)
+      - name: Show PATH and Check cargo
         run: |
-          cat > Cross.toml << EOF
-          [target.aarch64-unknown-linux-musl]
-          dockerfile = "Dockerfile.aarch64-musl"
-          EOF
+          echo $PATH
+          which cargo
+          cargo --version
 
-      - name: Build binary for ARM64
+      # Build using cross
+      - name: Build Binary
         run: |
-          # Add RUSTFLAGS to suppress static_mut_refs warnings in dependencies
-          # and use a higher optimization level for release builds
-          RUSTFLAGS="-A static_mut_refs -C opt-level=3" cross build --release --target aarch64-unknown-linux-musl
+          cross build --release --target ${{ matrix.target }}
 
-      - name: Package the binary
+      # Package the binaries
+      - name: Package Binary
         run: |
-          mkdir -p release
-          cp target/aarch64-unknown-linux-musl/release/${{ env.APP_NAME }} release/${{ env.APP_NAME }}-arm64-linux
-          tar -czf ${{ env.APP_NAME }}-arm64-linux.tar.gz -C release ${{ env.APP_NAME }}-arm64-linux
+          mkdir -p artifacts
+          if [ -f "target/${{ matrix.target }}/release/rust-spooler" ]; then
+            cd target/${{ matrix.target }}/release
+            tar czvf ../../../artifacts/rust-spooler-${{ matrix.target }}.tar.gz rust-spooler
+            cd -
+          else
+            echo "Binary not found at target/${{ matrix.target }}/release/rust-spooler"
+            find target -type f -name "rust-spooler" | xargs ls -la
+            exit 1
+          fi
 
-      - name: Upload artifact
+      # Upload the artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-arm64-linux.tar.gz
-          path: ${{ env.APP_NAME }}-arm64-linux.tar.gz
-          retention-days: 1
+          name: rust-spooler-${{ matrix.target }}
+          path: artifacts/rust-spooler-${{ matrix.target }}.tar.gz
 
-  create-release:
-    name: Create GitHub Release
-    needs: [build-x86_64, build-arm64]
+  release:
+    name: Create Release
+    needs: build
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Get application name from Cargo.toml
-        id: get_name
-        run: |
-          APP_NAME=$(grep -m1 "name" Cargo.toml | cut -d '"' -f2)
-          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
-
-      - name: Get the version
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-
-      - name: Download all artifacts
+      - name: Download all workflow run artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Prepare release files
-        run: |
-          mkdir -p release
-          find artifacts -name "*.tar.gz" -exec cp {} release/ \;
-          ls -la release/
+      - name: Display structure of downloaded files
+        run: find artifacts -type f | sort
 
-      - name: Create GitHub Release
+      - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          name: ${{ env.APP_NAME }} ${{ env.VERSION }}
           files: |
-            release/*.tar.gz
+            artifacts/rust-spooler-x86_64-unknown-linux-musl/rust-spooler-x86_64-unknown-linux-musl.tar.gz
+            artifacts/rust-spooler-aarch64-unknown-linux-musl/rust-spooler-aarch64-unknown-linux-musl.tar.gz
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
