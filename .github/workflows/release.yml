@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
 jobs:
   build:
     name: Build Release
@@ -18,69 +22,147 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
-
-      # Detect if running in ACT
-      - name: Check for ACT environment
-        id: is_act
+      - name: Set up for ACT
+        id: setup
         run: |
-          if [ -n "$GITHUB_ACTIONS" ] && [ "$GITHUB_ACTIONS" = "true" ] && [ -z "$ACT" ]; then
+          # Check if running in ACT
+          if [ -n "$ACT" ] || [ ! -n "$GITHUB_ACTIONS" ] || [ "$GITHUB_ACTIONS" != "true" ]; then
+            echo "Running in ACT environment"
+            echo "in_act=true" >> $GITHUB_OUTPUT
+          
+            # Create dummy output
+            mkdir -p artifacts
+            echo "This is a placeholder file for ACT testing" > artifacts/rust-spooler-${{ matrix.target }}.tar.gz
+          else
             echo "Running in GitHub Actions"
             echo "in_act=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Skip remaining steps if in ACT environment
+      - name: Install dependencies
+        if: steps.setup.outputs.in_act != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev pkg-config
+
+      - name: Set up Rust
+        if: steps.setup.outputs.in_act != 'true'
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          target: ${{ matrix.target }}
+
+      # For x86_64 target - build directly on host with musl
+      - name: Build x86_64-unknown-linux-musl
+        if: matrix.target == 'x86_64-unknown-linux-musl' && steps.setup.outputs.in_act != 'true'
+        env:
+          OPENSSL_STATIC: 1
+          OPENSSL_DIR: /usr/lib/ssl
+        run: |
+          # Install OpenSSL static libraries
+          sudo apt-get install -y libssl-dev
+          
+          # Configure cargo for musl
+          mkdir -p .cargo
+          echo '[target.x86_64-unknown-linux-musl]' > .cargo/config.toml
+          echo 'linker = "musl-gcc"' >> .cargo/config.toml
+          
+          # Build the binary
+          cargo build --release --target=x86_64-unknown-linux-musl
+          
+          # Check if the build succeeded
+          if [ -f "target/x86_64-unknown-linux-musl/release/rust-spooler" ]; then
+            echo "Build successful!"
+            mkdir -p artifacts
+            cd target/x86_64-unknown-linux-musl/release
+            tar czvf ../../../artifacts/rust-spooler-x86_64-unknown-linux-musl.tar.gz rust-spooler
+            cd -
           else
-            echo "Running in ACT"
-            echo "in_act=true" >> $GITHUB_OUTPUT
+            echo "Build failed!"
+            exit 1
           fi
 
-      # Skip the actual build in ACT
-      - name: Skip build in ACT
-        if: steps.is_act.outputs.in_act == 'true'
+      # For aarch64 target - using Docker for cross-compilation
+      - name: Build aarch64-unknown-linux-musl
+        if: matrix.target == 'aarch64-unknown-linux-musl' && steps.setup.outputs.in_act != 'true'
         run: |
-          echo "Skipping build in ACT environment"
-          mkdir -p artifacts
-          mkdir -p target/${{ matrix.target }}/release
-          echo "This is a dummy binary for testing" > target/${{ matrix.target }}/release/rust-spooler
-          cd target/${{ matrix.target }}/release
-          tar czvf ../../../artifacts/rust-spooler-${{ matrix.target }}.tar.gz rust-spooler
-          cd -
-
-      # Install Cross (only in GitHub Actions)
-      - name: Install Cross
-        if: steps.is_act.outputs.in_act != 'true'
-        run: |
-          cargo install cross --force
-
-      # Run the real build only in GitHub Actions
-      - name: Build with Cross
-        if: steps.is_act.outputs.in_act != 'true'
-        run: |
-          # Create Cross.toml
-          echo "[build]" > Cross.toml
-          echo "default-target = \"${{ matrix.target }}\"" >> Cross.toml
-          
-          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
-            echo "" >> Cross.toml
-            echo "[target.aarch64-unknown-linux-musl]" >> Cross.toml
-            echo "dockerfile = \"Dockerfile.aarch64-musl\"" >> Cross.toml
-          elif [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
-            echo "" >> Cross.toml
-            echo "[target.x86_64-unknown-linux-musl]" >> Cross.toml
-            echo "image = \"ghcr.io/cross-rs/x86_64-unknown-linux-musl:latest\"" >> Cross.toml
+          # Install Docker if necessary
+          if ! command -v docker &> /dev/null; then
+            echo "Docker not found, installing..."
+            sudo apt-get update
+            sudo apt-get install -y docker.io
+            sudo systemctl start docker
           fi
           
-          # Build with Cross
-          cross build --release --target ${{ matrix.target }}
+          # Create a Dockerfile specifically for the build
+          cat > Dockerfile.build << EOF
+          FROM rust:latest
+          
+          # Install dependencies
+          RUN apt-get update && \
+              apt-get install -y musl-tools wget build-essential libssl-dev pkg-config
+          
+          # Install aarch64 cross-compiler
+          RUN apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          
+          # Build and install musl-cross
+          RUN mkdir -p /build && cd /build && \
+              wget https://musl.cc/aarch64-linux-musl-cross.tgz && \
+              tar xf aarch64-linux-musl-cross.tgz -C /opt && \
+              ln -sf /opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc /usr/bin/aarch64-linux-musl-gcc
+          
+          # Add the target
+          RUN rustup target add aarch64-unknown-linux-musl
+          
+          # Set up OpenSSL for aarch64-musl
+          RUN mkdir -p /musl && cd /musl && \
+              wget https://www.openssl.org/source/openssl-3.1.5.tar.gz && \
+              tar xzf openssl-3.1.5.tar.gz && \
+              cd openssl-3.1.5 && \
+              CC=/opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc ./Configure no-shared no-async --prefix=/usr/local/musl-aarch64 --openssldir=/usr/local/musl-aarch64 linux-aarch64 && \
+              make -j\$(nproc) && \
+              make install_sw
+          
+          # Working directory
+          WORKDIR /app
+          EOF
+          
+          # Build the Docker image
+          docker build -t rust-aarch64-musl -f Dockerfile.build .
+          
+          # Copy the project files into a temporary directory
+          mkdir -p /tmp/build
+          cp -r . /tmp/build
+          
+          # Run the build in the Docker container
+          docker run --rm -v /tmp/build:/app -e OPENSSL_DIR=/usr/local/musl-aarch64 -e OPENSSL_STATIC=1 rust-aarch64-musl bash -c "
+            # Configure cargo
+            mkdir -p .cargo
+            echo '[target.aarch64-unknown-linux-musl]' > .cargo/config.toml
+            echo 'linker = \"/opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc\"' >> .cargo/config.toml
+            echo 'rustflags = [\"-C\", \"target-feature=+crt-static\"]' >> .cargo/config.toml
+          
+            # Build
+            cargo build --release --target aarch64-unknown-linux-musl
+          "
+          
+          # Copy the built binary back
+          mkdir -p target/aarch64-unknown-linux-musl/release
+          cp /tmp/build/target/aarch64-unknown-linux-musl/release/rust-spooler target/aarch64-unknown-linux-musl/release/
           
           # Package the binary
-          mkdir -p artifacts
-          cd target/${{ matrix.target }}/release
-          tar czvf ../../../artifacts/rust-spooler-${{ matrix.target }}.tar.gz rust-spooler
-          cd -
+          if [ -f "target/aarch64-unknown-linux-musl/release/rust-spooler" ]; then
+            echo "Build successful!"
+            mkdir -p artifacts
+            cd target/aarch64-unknown-linux-musl/release
+            tar czvf ../../../artifacts/rust-spooler-aarch64-unknown-linux-musl.tar.gz rust-spooler
+            cd -
+          else
+            echo "Build failed!"
+            exit 1
+          fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -108,6 +190,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/rust-spooler-x86_64-unknown-linux-musl/rust-spooler-${{ matrix.target }}.tar.gz
-            artifacts/rust-spooler-aarch64-unknown-linux-musl/rust-spooler-${{ matrix.target }}.tar.gz
+            artifacts/rust-spooler-x86_64-unknown-linux-musl/rust-spooler-x86_64-unknown-linux-musl.tar.gz
+            artifacts/rust-spooler-aarch64-unknown-linux-musl/rust-spooler-aarch64-unknown-linux-musl.tar.gz
           generate_release_notes: true
