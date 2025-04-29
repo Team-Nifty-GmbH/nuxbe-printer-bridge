@@ -8,7 +8,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  DEBIAN_FRONTEND: noninteractive
 
 jobs:
   build:
@@ -23,60 +22,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Install Rust with the correct PATH setup
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
-          profile: minimal
+          targets: ${{ matrix.target }}
 
-      # We'll use cargo-cross directly from crates.io which should handle the PATH correctly
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config make gcc g++
+
       - name: Install cross
         run: |
-          cargo install cross --version 0.2.5
+          cargo install cross --force
 
-      # Create a Dockerfile with proper non-interactive setup for the musl packages
-      - name: Create Docker configuration
-        run: |
-          mkdir -p .cargo
-          # Create a Cross.toml file that handles the non-interactive setup properly
-          cat > Cross.toml << 'EOF'
-          [target.${{ matrix.target }}]
-          pre-build = [
-              "export DEBIAN_FRONTEND=noninteractive",
-              "apt-get update",
-              "apt-get install -y -q --no-install-recommends pkg-config libssl-dev musl-dev",
-              "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
-          ]
-          EOF
-
-          # For aarch64 target, add a custom Dockerfile
-          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
-            cat > Dockerfile.aarch64-musl << 'EOF'
-          FROM ghcr.io/cross-rs/aarch64-unknown-linux-musl:latest
-          ENV DEBIAN_FRONTEND=noninteractive
-          RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections && \
-              apt-get update && \
-              apt-get install -y -q --no-install-recommends pkg-config libssl-dev musl-dev && \
-              rm -rf /var/lib/apt/lists/*
-          EOF
-          fi
-
-      # Build the binary with cargo directly (for debugging)
       - name: Show PATH and Check cargo
         run: |
           echo $PATH
           which cargo
           cargo --version
 
-      # Build using cross
       - name: Build Binary
         run: |
           cross build --release --target ${{ matrix.target }}
 
-      # Package the binaries
       - name: Package Binary
         run: |
           mkdir -p artifacts
@@ -86,11 +55,10 @@ jobs:
             cd -
           else
             echo "Binary not found at target/${{ matrix.target }}/release/rust-spooler"
-            find target -type f -name "rust-spooler" | xargs ls -la
+            find target -type f -name "rust-spooler" || true
             exit 1
           fi
 
-      # Upload the artifacts
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
