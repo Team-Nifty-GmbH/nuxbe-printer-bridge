@@ -8,7 +8,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  OPENSSL_VERSION: 3.1.5
 
 jobs:
   build:
@@ -23,21 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          target: ${{ matrix.target }}
-
-      # Install build dependencies
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools pkg-config libssl-dev
-
-      # Detect if running in act
+      # Detect if running in act for local testing
       - name: Check for act environment
         id: check_env
         run: |
@@ -53,111 +38,41 @@ jobs:
             echo "in_act=false" >> $GITHUB_OUTPUT
           fi
 
-      # Set up Docker Buildx (only in GitHub Actions)
-      - name: Set up Docker buildx
-        if: steps.check_env.outputs.in_act != 'true'
-        uses: docker/setup-buildx-action@v2
-
-      # Use different base images for each target architecture
-      - name: Create Dockerfile for ${{ matrix.target }}
+      # Build using cross (only in real GitHub Actions, not act)
+      - name: Install cross
         if: steps.check_env.outputs.in_act != 'true'
         run: |
-          # Select base image based on target architecture
-          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
-            BASE_IMAGE="messense/rust-musl-cross:x86_64-musl"
-          else
-            BASE_IMAGE="messense/rust-musl-cross:aarch64-musl"
-          fi
-          
-          cat > Dockerfile.${{ matrix.target }} << EOF
-          FROM ${BASE_IMAGE}
-          
-          RUN apt-get update && \
-              apt-get install -y pkg-config wget make gcc g++ perl
-          
-          # Build and install OpenSSL for the target
-          RUN mkdir -p /tmp/openssl && \
-              cd /tmp/openssl && \
-              wget https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz && \
-              tar xzf openssl-${OPENSSL_VERSION}.tar.gz && \
-              cd openssl-${OPENSSL_VERSION}
-          
-          # First check what compilers are available in the image
-          RUN which gcc || true && \
-              ls -la /usr/bin/*-gcc || true && \
-              ls -la /usr/local/bin/*-gcc || true && \
-              ls -la /bin/*-gcc || true
-          
-          # Configure and build OpenSSL based on target with appropriate compiler
-          RUN cd /tmp/openssl/openssl-${OPENSSL_VERSION} && \
-              if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then \
-                CC="x86_64-linux-musl-gcc" ./Configure no-shared no-async --prefix=/usr/local/musl --openssldir=/usr/local/musl linux-x86_64; \
-              else \
-                CC="aarch64-linux-musl-gcc" ./Configure no-shared no-async --prefix=/usr/local/musl-aarch64 --openssldir=/usr/local/musl-aarch64 linux-aarch64; \
-              fi && \
-              make -j\$(nproc) && \
-              make install_sw
-          
-          # Set environment variables for the target
-          ENV PKG_CONFIG_ALLOW_CROSS=1 \
-              OPENSSL_STATIC=1
-          
-          # Set target-specific environment variables
-          RUN if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then \
-                echo "export OPENSSL_DIR=/usr/local/musl" > /etc/profile.d/openssl.sh; \
-                echo "export OPENSSL_INCLUDE_DIR=/usr/local/musl/include" >> /etc/profile.d/openssl.sh; \
-                echo "export OPENSSL_LIB_DIR=/usr/local/musl/lib" >> /etc/profile.d/openssl.sh; \
-              else \
-                echo "export OPENSSL_DIR=/usr/local/musl-aarch64" > /etc/profile.d/openssl.sh; \
-                echo "export OPENSSL_INCLUDE_DIR=/usr/local/musl-aarch64/include" >> /etc/profile.d/openssl.sh; \
-                echo "export OPENSSL_LIB_DIR=/usr/local/musl-aarch64/lib" >> /etc/profile.d/openssl.sh; \
-              fi && \
-              chmod +x /etc/profile.d/openssl.sh
-          
-          # Source the environment variables in .bashrc
-          RUN echo ". /etc/profile.d/openssl.sh" >> ~/.bashrc
-          
-          WORKDIR /workdir
-          EOF
-          
-          # Build the Docker image
-          docker buildx build --platform linux/amd64 -t rust-${{ matrix.target }}:latest -f Dockerfile.${{ matrix.target }} .
+          cargo install cross --git https://github.com/cross-rs/cross
 
-      # Build the binary using the custom Docker image
+      # Set up Rust
+      - name: Set up Rust
+        if: steps.check_env.outputs.in_act != 'true'
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          target: ${{ matrix.target }}
+
+      # Create Cross.toml
+      - name: Create Cross configuration
+        if: steps.check_env.outputs.in_act != 'true'
+        run: |
+          cat > Cross.toml << EOF
+          [build]
+          xargo = false
+          
+          [target.${{ matrix.target }}]
+          image = "ghcr.io/cross-rs/${{ matrix.target }}:main"
+          EOF
+
+      # Build the binary
       - name: Build ${{ matrix.target }} Binary
         if: steps.check_env.outputs.in_act != 'true'
         run: |
-          # Create .cargo/config.toml with proper linker settings for musl-cross
-          mkdir -p .cargo
-          
-          # Find what compilers are available in the container
-          docker run --rm rust-${{ matrix.target }}:latest bash -c "which gcc || true && find /usr/bin /usr/local/bin -name '*-gcc' | sort"
-          
-          cat > .cargo/config.toml << EOF
-          [target.${{ matrix.target }}]
-          rustflags = ["-C", "target-feature=+crt-static"]
-          EOF
-          
-          # Add specific linker settings based on target for musl-cross images
-          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
-            echo "linker = \"x86_64-linux-musl-gcc\"" >> .cargo/config.toml
-          else
-            echo "linker = \"aarch64-linux-musl-gcc\"" >> .cargo/config.toml
-          fi
-          
-          # Debug the environment first
-          docker run --rm rust-${{ matrix.target }}:latest bash -c "ls -la /usr/local/ && find /usr/local -name 'libssl*' || true"
-          
-          # Run the build in Docker with verbose output
-          docker run --rm -v $(pwd):/workdir \
-            -e OPENSSL_STATIC=1 \
-            -e PKG_CONFIG_ALLOW_CROSS=1 \
-            -e OPENSSL_DIR=/usr/local/${{ matrix.target == 'x86_64-unknown-linux-musl' && 'musl' || 'musl-aarch64' }} \
-            -e OPENSSL_INCLUDE_DIR=/usr/local/${{ matrix.target == 'x86_64-unknown-linux-musl' && 'musl' || 'musl-aarch64' }}/include \
-            -e OPENSSL_LIB_DIR=/usr/local/${{ matrix.target == 'x86_64-unknown-linux-musl' && 'musl' || 'musl-aarch64' }}/lib \
-            -e RUST_BACKTRACE=1 \
-            rust-${{ matrix.target }}:latest \
-            bash -c "source /etc/profile.d/openssl.sh && ls -la /usr/local/${{ matrix.target == 'x86_64-unknown-linux-musl' && 'musl' || 'musl-aarch64' }}/lib && cargo build --release --target ${{ matrix.target }} -vv"
+          # Show all available cross images
+          echo "Available cross images:"
+          cross build --target ${{ matrix.target }} --release
           
           # Check if build succeeded
           if [ -f "target/${{ matrix.target }}/release/rust-spooler" ]; then
