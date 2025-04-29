@@ -5,10 +5,6 @@ on:
     tags:
       - 'v*'
 
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-
 jobs:
   build:
     name: Build Release
@@ -22,54 +18,83 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
         with:
-          targets: ${{ matrix.target }}
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
 
-      - name: Install prerequisites
+      # Detect if running in ACT
+      - name: Check for ACT environment
+        id: is_act
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config make gcc g++
+          if [ -n "$GITHUB_ACTIONS" ] && [ "$GITHUB_ACTIONS" = "true" ] && [ -z "$ACT" ]; then
+            echo "Running in GitHub Actions"
+            echo "in_act=false" >> $GITHUB_OUTPUT
+          else
+            echo "Running in ACT"
+            echo "in_act=true" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Install cross
+      # Skip the actual build in ACT
+      - name: Skip build in ACT
+        if: steps.is_act.outputs.in_act == 'true'
+        run: |
+          echo "Skipping build in ACT environment"
+          mkdir -p artifacts
+          mkdir -p target/${{ matrix.target }}/release
+          echo "This is a dummy binary for testing" > target/${{ matrix.target }}/release/rust-spooler
+          cd target/${{ matrix.target }}/release
+          tar czvf ../../../artifacts/rust-spooler-${{ matrix.target }}.tar.gz rust-spooler
+          cd -
+
+      # Install Cross (only in GitHub Actions)
+      - name: Install Cross
+        if: steps.is_act.outputs.in_act != 'true'
         run: |
           cargo install cross --force
 
-      - name: Show PATH and Check cargo
+      # Run the real build only in GitHub Actions
+      - name: Build with Cross
+        if: steps.is_act.outputs.in_act != 'true'
         run: |
-          echo $PATH
-          which cargo
-          cargo --version
-
-      - name: Build Binary
-        run: |
-          cross build --release --target ${{ matrix.target }}
-
-      - name: Package Binary
-        run: |
-          mkdir -p artifacts
-          if [ -f "target/${{ matrix.target }}/release/rust-spooler" ]; then
-            cd target/${{ matrix.target }}/release
-            tar czvf ../../../artifacts/rust-spooler-${{ matrix.target }}.tar.gz rust-spooler
-            cd -
-          else
-            echo "Binary not found at target/${{ matrix.target }}/release/rust-spooler"
-            find target -type f -name "rust-spooler" || true
-            exit 1
+          # Create Cross.toml
+          echo "[build]" > Cross.toml
+          echo "default-target = \"${{ matrix.target }}\"" >> Cross.toml
+          
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
+            echo "" >> Cross.toml
+            echo "[target.aarch64-unknown-linux-musl]" >> Cross.toml
+            echo "dockerfile = \"Dockerfile.aarch64-musl\"" >> Cross.toml
+          elif [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
+            echo "" >> Cross.toml
+            echo "[target.x86_64-unknown-linux-musl]" >> Cross.toml
+            echo "image = \"ghcr.io/cross-rs/x86_64-unknown-linux-musl:latest\"" >> Cross.toml
           fi
+          
+          # Build with Cross
+          cross build --release --target ${{ matrix.target }}
+          
+          # Package the binary
+          mkdir -p artifacts
+          cd target/${{ matrix.target }}/release
+          tar czvf ../../../artifacts/rust-spooler-${{ matrix.target }}.tar.gz rust-spooler
+          cd -
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rust-spooler-${{ matrix.target }}
           path: artifacts/rust-spooler-${{ matrix.target }}.tar.gz
+          retention-days: 1
 
   release:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
     steps:
       - name: Download all workflow run artifacts
         uses: actions/download-artifact@v4
@@ -83,8 +108,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/rust-spooler-x86_64-unknown-linux-musl/rust-spooler-x86_64-unknown-linux-musl.tar.gz
-            artifacts/rust-spooler-aarch64-unknown-linux-musl/rust-spooler-aarch64-unknown-linux-musl.tar.gz
+            artifacts/rust-spooler-x86_64-unknown-linux-musl/rust-spooler-${{ matrix.target }}.tar.gz
+            artifacts/rust-spooler-aarch64-unknown-linux-musl/rust-spooler-${{ matrix.target }}.tar.gz
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
