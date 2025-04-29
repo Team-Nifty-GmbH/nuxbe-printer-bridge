@@ -8,7 +8,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  OPENSSL_VERSION: 3.5.0
+  OPENSSL_VERSION: 3.1.5
 
 jobs:
   build:
@@ -53,17 +53,24 @@ jobs:
             echo "in_act=false" >> $GITHUB_OUTPUT
           fi
 
-      # Build container for cross-compilation (only in GitHub Actions)
+      # Set up Docker Buildx (only in GitHub Actions)
       - name: Set up Docker buildx
         if: steps.check_env.outputs.in_act != 'true'
         uses: docker/setup-buildx-action@v2
 
-      - name: Build Docker Image for ${{ matrix.target }}
+      # Use different base images for each target architecture
+      - name: Create Dockerfile for ${{ matrix.target }}
         if: steps.check_env.outputs.in_act != 'true'
         run: |
-          # Create Dockerfile for the target
+          # Select base image based on target architecture
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
+            BASE_IMAGE="messense/rust-musl-cross:x86_64-musl"
+          else
+            BASE_IMAGE="messense/rust-musl-cross:aarch64-musl"
+          fi
+          
           cat > Dockerfile.${{ matrix.target }} << EOF
-          FROM rustembedded/cross:${{ matrix.target }}-0.2.4
+          FROM ${BASE_IMAGE}
           
           RUN apt-get update && \
               apt-get install -y pkg-config wget make gcc g++ perl
@@ -71,7 +78,7 @@ jobs:
           # Build and install OpenSSL for the target
           RUN mkdir -p /tmp/openssl && \
               cd /tmp/openssl && \
-              wget https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz && \
+              wget https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz && \
               tar xzf openssl-${OPENSSL_VERSION}.tar.gz && \
               cd openssl-${OPENSSL_VERSION}
           
@@ -80,7 +87,7 @@ jobs:
               if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then \
                 CC="musl-gcc" ./Configure no-shared no-async --prefix=/usr/local/musl --openssldir=/usr/local/musl linux-x86_64; \
               else \
-                CC="aarch64-linux-gnu-gcc" ./Configure no-shared no-async --prefix=/usr/local/musl-aarch64 --openssldir=/usr/local/musl-aarch64 linux-aarch64; \
+                CC="aarch64-linux-musl-gcc" ./Configure no-shared no-async --prefix=/usr/local/musl-aarch64 --openssldir=/usr/local/musl-aarch64 linux-aarch64; \
               fi && \
               make -j\$(nproc) && \
               make install_sw
@@ -124,9 +131,9 @@ jobs:
           
           # Add specific linker settings based on target
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
-            echo "linker = \"musl-gcc\"" >> .cargo/config.toml
+            echo "linker = \"x86_64-linux-musl-gcc\"" >> .cargo/config.toml
           else
-            echo "linker = \"aarch64-linux-gnu-gcc\"" >> .cargo/config.toml
+            echo "linker = \"aarch64-linux-musl-gcc\"" >> .cargo/config.toml
           fi
           
           # Run the build in Docker
@@ -181,6 +188,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/rust-spooler-x86_64-unknown-linux-musl/rust-spooler-${{ matrix.target }}.tar.gz
-            artifacts/rust-spooler-aarch64-unknown-linux-musl/rust-spooler-${{ matrix.target }}.tar.gz
+            artifacts/rust-spooler-x86_64-unknown-linux-musl/rust-spooler-x86_64-unknown-linux-musl.tar.gz
+            artifacts/rust-spooler-aarch64-unknown-linux-musl/rust-spooler-aarch64-unknown-linux-musl.tar.gz
           generate_release_notes: true
