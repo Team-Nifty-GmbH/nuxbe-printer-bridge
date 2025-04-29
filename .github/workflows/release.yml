@@ -82,10 +82,16 @@ jobs:
               tar xzf openssl-${OPENSSL_VERSION}.tar.gz && \
               cd openssl-${OPENSSL_VERSION}
           
-          # Configure and build OpenSSL based on target
+          # First check what compilers are available in the image
+          RUN which gcc || true && \
+              ls -la /usr/bin/*-gcc || true && \
+              ls -la /usr/local/bin/*-gcc || true && \
+              ls -la /bin/*-gcc || true
+          
+          # Configure and build OpenSSL based on target with appropriate compiler
           RUN cd /tmp/openssl/openssl-${OPENSSL_VERSION} && \
               if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then \
-                CC="musl-gcc" ./Configure no-shared no-async --prefix=/usr/local/musl --openssldir=/usr/local/musl linux-x86_64; \
+                CC="x86_64-linux-musl-gcc" ./Configure no-shared no-async --prefix=/usr/local/musl --openssldir=/usr/local/musl linux-x86_64; \
               else \
                 CC="aarch64-linux-musl-gcc" ./Configure no-shared no-async --prefix=/usr/local/musl-aarch64 --openssldir=/usr/local/musl-aarch64 linux-aarch64; \
               fi && \
@@ -121,30 +127,37 @@ jobs:
       - name: Build ${{ matrix.target }} Binary
         if: steps.check_env.outputs.in_act != 'true'
         run: |
-          # Create .cargo/config.toml
+          # Create .cargo/config.toml with proper linker settings for musl-cross
           mkdir -p .cargo
+          
+          # Find what compilers are available in the container
+          docker run --rm rust-${{ matrix.target }}:latest bash -c "which gcc || true && find /usr/bin /usr/local/bin -name '*-gcc' | sort"
           
           cat > .cargo/config.toml << EOF
           [target.${{ matrix.target }}]
           rustflags = ["-C", "target-feature=+crt-static"]
           EOF
           
-          # Add specific linker settings based on target
+          # Add specific linker settings based on target for musl-cross images
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
             echo "linker = \"x86_64-linux-musl-gcc\"" >> .cargo/config.toml
           else
             echo "linker = \"aarch64-linux-musl-gcc\"" >> .cargo/config.toml
           fi
           
-          # Run the build in Docker
+          # Debug the environment first
+          docker run --rm rust-${{ matrix.target }}:latest bash -c "ls -la /usr/local/ && find /usr/local -name 'libssl*' || true"
+          
+          # Run the build in Docker with verbose output
           docker run --rm -v $(pwd):/workdir \
             -e OPENSSL_STATIC=1 \
             -e PKG_CONFIG_ALLOW_CROSS=1 \
             -e OPENSSL_DIR=/usr/local/${{ matrix.target == 'x86_64-unknown-linux-musl' && 'musl' || 'musl-aarch64' }} \
             -e OPENSSL_INCLUDE_DIR=/usr/local/${{ matrix.target == 'x86_64-unknown-linux-musl' && 'musl' || 'musl-aarch64' }}/include \
             -e OPENSSL_LIB_DIR=/usr/local/${{ matrix.target == 'x86_64-unknown-linux-musl' && 'musl' || 'musl-aarch64' }}/lib \
+            -e RUST_BACKTRACE=1 \
             rust-${{ matrix.target }}:latest \
-            bash -c "source /etc/profile.d/openssl.sh && cargo build --release --target ${{ matrix.target }}"
+            bash -c "source /etc/profile.d/openssl.sh && ls -la /usr/local/${{ matrix.target == 'x86_64-unknown-linux-musl' && 'musl' || 'musl-aarch64' }}/lib && cargo build --release --target ${{ matrix.target }} -vv"
           
           # Check if build succeeded
           if [ -f "target/${{ matrix.target }}/release/rust-spooler" ]; then
