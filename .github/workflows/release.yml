@@ -75,6 +75,9 @@ jobs:
           
           RUN apt-get update && \
               apt-get install -y pkg-config libssl-dev musl-dev musl-tools
+          
+          # Install the target
+          RUN rustup target add ${{ matrix.target }}
 
           # Set environment variables for openssl-sys
           ENV OPENSSL_STATIC=1 \
