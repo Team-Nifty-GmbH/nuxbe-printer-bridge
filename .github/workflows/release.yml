@@ -83,8 +83,8 @@ jobs:
           WORKDIR /app
           EOF
           
-          # Build the Docker image
-          docker buildx build --platform linux/amd64 -t rust-musl-builder:${{ matrix.target }} -f Dockerfile.${{ matrix.target }} .
+          # Build the Docker image and load it for use with docker run
+          docker buildx build --platform linux/amd64 -t rust-musl-builder:${{ matrix.target }} -f Dockerfile.${{ matrix.target }} . --load
 
       # Run the build
       - name: Build ${{ matrix.target }} Binary
@@ -101,6 +101,9 @@ jobs:
           
           # Run the build in Docker with vendored openssl
           docker run --rm -v $(pwd):/app \
+            -e CARGO_TARGET_DIR=/app/target \
+            -e OPENSSL_STATIC=1 \
+            -e PKG_CONFIG_ALLOW_CROSS=1 \
             rust-musl-builder:${{ matrix.target }} \
             cargo build --release --target ${{ matrix.target }} --features=vendored-openssl
           
