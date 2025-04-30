@@ -15,44 +15,17 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target:
-          - x86_64-unknown-linux-musl
-          - aarch64-unknown-linux-musl
+        include:
+          - target: x86_64-unknown-linux-musl
+            cross_image: ghcr.io/cross-rs/x86_64-unknown-linux-musl:0.2.4
+          - target: aarch64-unknown-linux-musl
+            cross_image: ghcr.io/cross-rs/aarch64-unknown-linux-musl:0.2.4
 
     steps:
       - uses: actions/checkout@v4
 
-      # Detect if running in act for local testing
-      - name: Check for act environment
-        id: check_env
-        run: |
-          if [ -n "$ACT" ] || [ ! -n "$GITHUB_ACTIONS" ] || [ "$GITHUB_ACTIONS" != "true" ]; then
-            echo "Running in act environment"
-            echo "in_act=true" >> $GITHUB_OUTPUT
-          
-            # Create dummy artifacts for act testing
-            mkdir -p artifacts
-            echo "Placeholder for ${{ matrix.target }} binary" > artifacts/rust-spooler-${{ matrix.target }}.tar.gz
-          else
-            echo "Running in GitHub Actions"
-            echo "in_act=false" >> $GITHUB_OUTPUT
-          fi
-
-      # If using act, skip the real build
-      - name: Skip remaining steps in act
-        if: steps.check_env.outputs.in_act == 'true'
-        run: echo "Running in act - skipping build steps"
-
-      # Install deps if not in act
-      - name: Install dependencies
-        if: steps.check_env.outputs.in_act != 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools pkg-config libssl-dev
-
       # Set up Rust
       - name: Set up Rust
-        if: steps.check_env.outputs.in_act != 'true'
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -60,55 +33,67 @@ jobs:
           override: true
           target: ${{ matrix.target }}
 
-      # Set up Docker Buildx
-      - name: Set up Docker buildx
-        if: steps.check_env.outputs.in_act != 'true'
-        uses: docker/setup-buildx-action@v2
+      # Install cross
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
-      # Create custom docker image
-      - name: Create Docker image for ${{ matrix.target }}
-        if: steps.check_env.outputs.in_act != 'true'
+      # Create Cross.toml config
+      - name: Configure cross
         run: |
-          # Create Dockerfile for building with OpenSSL
-          cat > Dockerfile.${{ matrix.target }} << EOF
-          FROM clux/muslrust:stable
-          
-          RUN apt-get update && \
-              apt-get install -y pkg-config libssl-dev musl-dev musl-tools
-          
-          # Install the target
-          RUN rustup target add ${{ matrix.target }}
-
-          # Set environment variables for openssl-sys
-          ENV OPENSSL_STATIC=1 \
-              PKG_CONFIG_ALLOW_CROSS=1
-          
-          WORKDIR /app
-          EOF
-          
-          # Build the Docker image and load it for use with docker run
-          docker buildx build --platform linux/amd64 -t rust-musl-builder:${{ matrix.target }} -f Dockerfile.${{ matrix.target }} . --load
-
-      # Run the build
-      - name: Build ${{ matrix.target }} Binary
-        if: steps.check_env.outputs.in_act != 'true'
-        run: |
-          # Create .cargo/config.toml with static linking flags
-          mkdir -p .cargo
-          
-          cat > .cargo/config.toml << EOF
+          cat > Cross.toml << EOF
           [target.${{ matrix.target }}]
-          rustflags = ["-C", "target-feature=+crt-static"]
-          linker = "rust-lld"
+          image = "${{ matrix.cross_image }}"
           EOF
+
+          # Add a passthrough for OpenSSL env variables
+          cat >> Cross.toml << EOF
+          [build.env]
+          passthrough = [
+            "OPENSSL_DIR",
+            "OPENSSL_INCLUDE_DIR",
+            "OPENSSL_LIB_DIR",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "OPENSSL_STATIC",
+            "OPENSSL_NO_VENDOR"
+          ]
+          EOF
+
+      # Prepare Cargo.toml for pure vendored builds
+      - name: Update Cargo.toml with vendored features
+        run: |
+          # Use 'native-tls-vendored' feature for reqwest
+          sed -i 's/reqwest = { version = "0.12", features = \["json"\]/reqwest = { version = "0.12", features = \["json", "native-tls-vendored"\]/g' Cargo.toml
           
-          # Run the build in Docker with vendored openssl
-          docker run --rm -v $(pwd):/app \
-            -e CARGO_TARGET_DIR=/app/target \
-            -e OPENSSL_STATIC=1 \
-            -e PKG_CONFIG_ALLOW_CROSS=1 \
-            rust-musl-builder:${{ matrix.target }} \
-            cargo build --release --target ${{ matrix.target }} --features=vendored-openssl
+          # Set openssl-sys to use vendored feature
+          if ! grep -q "openssl-sys" Cargo.toml; then
+            echo 'openssl-sys = { version = "0.9", features = ["vendored"] }' >> Cargo.toml
+          fi
+          
+          # Create feature for vendored-openssl if it doesn't exist
+          if ! grep -q "\[features\]" Cargo.toml; then
+            echo -e "\n[features]\ndefault = []\nvendored-openssl = [\"openssl-sys/vendored\"]" >> Cargo.toml
+          elif ! grep -q "vendored-openssl" Cargo.toml; then
+            sed -i '/\[features\]/a vendored-openssl = [\"openssl-sys/vendored\"]' Cargo.toml
+          fi
+          
+          # Modify reverb-rs to use native-tls-vendored if available
+          if grep -q "reverb-rs.*native-tls" Cargo.toml; then
+            sed -i 's/reverb-rs.*native-tls/reverb-rs = { git = "https:\/\/github.com\/Team-Nifty-GmbH\/reverb_rs", branch = "main", default-features = false, features = ["native-tls-vendored"] }/g' Cargo.toml
+          fi
+          
+          # Show the updated Cargo.toml
+          cat Cargo.toml
+
+      # Build with cross
+      - name: Build with cross
+        run: |
+          # Set environment variables
+          export OPENSSL_STATIC=1
+          export PKG_CONFIG_ALLOW_CROSS=1
+          
+          # Build with verbose output to diagnose any issues
+          RUST_BACKTRACE=1 cross build --target ${{ matrix.target }} --release --features vendored-openssl -vv
           
           # Check if build succeeded
           if [ -f "target/${{ matrix.target }}/release/rust-spooler" ]; then
