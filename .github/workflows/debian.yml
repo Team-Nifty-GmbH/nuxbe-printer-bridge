@@ -1,0 +1,172 @@
+name: Build Debian Package
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-deb-package:
+    name: Build Debian Package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up release variables
+        id: vars
+        run: |
+          RELEASE_TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${RELEASE_TAG#v}
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download x86_64 artifact
+        uses: dsaltares/fetch-gh-release-asset@master
+        with:
+          version: ${{ env.RELEASE_TAG }}
+          file: rust-spooler-x86_64-unknown-linux-musl.tar.gz
+          target: rust-spooler-x86_64-unknown-linux-musl.tar.gz
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download aarch64 artifact
+        uses: dsaltares/fetch-gh-release-asset@master
+        with:
+          version: ${{ env.RELEASE_TAG }}
+          file: rust-spooler-aarch64-unknown-linux-musl.tar.gz
+          target: rust-spooler-aarch64-unknown-linux-musl.tar.gz
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create package directory structure
+        run: |
+          mkdir -p mypackage/DEBIAN
+          mkdir -p mypackage/usr/bin/x86_64
+          mkdir -p mypackage/usr/bin/arm64
+          mkdir -p mypackage/usr/bin
+          mkdir -p mypackage/lib/systemd/system
+
+      - name: Extract binary artifacts
+        run: |
+          tar -xzf rust-spooler-x86_64-unknown-linux-musl.tar.gz -C mypackage/usr/bin/x86_64/
+          tar -xzf rust-spooler-aarch64-unknown-linux-musl.tar.gz -C mypackage/usr/bin/arm64/
+          chmod +x mypackage/usr/bin/x86_64/rust-spooler
+          chmod +x mypackage/usr/bin/arm64/rust-spooler
+
+      - name: Create wrapper script
+        run: |
+          cat > mypackage/usr/bin/rust-spooler << 'EOF'
+          #!/bin/sh
+          # Architecture detection script for rust-spooler
+          
+          ARCH=$(dpkg --print-architecture)
+          if [ "$ARCH" = "arm64" ]; then
+              exec /usr/bin/arm64/rust-spooler "$@"
+          else
+              exec /usr/bin/x86_64/rust-spooler "$@"
+          fi
+          EOF
+          chmod +x mypackage/usr/bin/rust-spooler
+
+      - name: Create systemd service file
+        run: |
+          cat > mypackage/lib/systemd/system/flux-spooler.service << 'EOF'
+          [Unit]
+          Description=FLUX ERP Print Spooler Service
+          After=network.target cups.service
+          Requires=cups.service
+          Documentation=https://github.com/Team-Nifty-GmbH/flux-rust-spooler
+          
+          [Service]
+          Type=simple
+          User=root
+          ExecStart=/usr/bin/rust-spooler run
+          Restart=on-failure
+          RestartSec=10
+          StandardOutput=journal
+          StandardError=journal
+          Environment="RUST_BACKTRACE=1"
+          
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+      - name: Create Debian control files
+        run: |
+          # Create control file
+          cat > mypackage/DEBIAN/control << EOF
+          Package: flux-cups-spooler
+          Version: $VERSION
+          Section: utils
+          Priority: optional
+          Architecture: amd64 arm64
+          Maintainer: Team Nifty <team@example.com>
+          Depends: cups, cups-client, libssl-dev
+          Description: FLUX ERP to CUPS Print Server
+           A bridge between FLUX ERP and CUPS printing system
+           to manage printers and handle print jobs. It provides
+           a REST API, real-time WebSocket integration, and 
+           automatic synchronization between systems.
+          EOF
+          
+          # Create post-installation script
+          cat > mypackage/DEBIAN/postinst << 'EOF'
+          #!/bin/sh
+          set -e
+          
+          if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ]; then
+              # Make sure the wrapper script is executable
+              chmod +x /usr/bin/rust-spooler
+          
+              # Create config directory if it doesn't exist
+              mkdir -p /etc/flux-spooler
+          
+              # Reload systemd to recognize the new service file
+              systemctl daemon-reload >/dev/null 2>&1 || true
+          
+              # Enable service but don't start it
+              echo "Flux print spooler service has been installed but not started."
+              echo "Configure the service with: rust-spooler config"
+              echo "Then start it with: systemctl start flux-spooler.service"
+              echo "To enable at boot: systemctl enable flux-spooler.service"
+          fi
+          
+          exit 0
+          EOF
+          chmod 755 mypackage/DEBIAN/postinst
+          
+          # Create pre-removal script
+          cat > mypackage/DEBIAN/prerm << 'EOF'
+          #!/bin/sh
+          set -e
+          
+          if [ "$1" = "remove" ]; then
+              # Stop the service if it's running
+              systemctl stop flux-spooler.service >/dev/null 2>&1 || true
+              systemctl disable flux-spooler.service >/dev/null 2>&1 || true
+          fi
+          
+          exit 0
+          EOF
+          chmod 755 mypackage/DEBIAN/prerm
+          
+          # Create conffiles
+          cat > mypackage/DEBIAN/conffiles << 'EOF'
+          /etc/flux-spooler/config.json
+          EOF
+
+      - name: Build Debian package
+        run: |
+          dpkg-deb --build mypackage
+          PKG_NAME="flux-cups-spooler_${VERSION}_multi.deb"
+          mv mypackage.deb "$PKG_NAME"
+          echo "PACKAGE_NAME=$PKG_NAME" >> $GITHUB_ENV
+
+      - name: Upload Debian package to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ env.PACKAGE_NAME }}
+          asset_name: ${{ env.PACKAGE_NAME }}
+          tag: ${{ env.RELEASE_TAG }}
+          overwrite: true
