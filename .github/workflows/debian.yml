@@ -3,6 +3,16 @@ name: Build Debian Package
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (without v prefix)'
+        required: true
+        default: '0.1.0'
+      release_tag:
+        description: 'Release tag (with v prefix)'
+        required: true
+        default: 'v0.1.0'
 
 jobs:
   build-deb-package:
