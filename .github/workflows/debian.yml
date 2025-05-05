@@ -116,13 +116,13 @@ jobs:
 
       - name: Create Debian control files
         run: |
-          # Create control file
+          # Create control file with FIXED architecture string (no spaces)
           cat > mypackage/DEBIAN/control << EOF
           Package: flux-cups-spooler
           Version: $VERSION
           Section: utils
           Priority: optional
-          Architecture: amd64 arm64
+          Architecture: all
           Maintainer: Team Nifty <team@example.com>
           Depends: cups, cups-client, libssl-dev
           Description: FLUX ERP to CUPS Print Server
@@ -131,48 +131,52 @@ jobs:
            a REST API, real-time WebSocket integration, and 
            automatic synchronization between systems.
           EOF
-          
+
           # Create post-installation script
           cat > mypackage/DEBIAN/postinst << 'EOF'
           #!/bin/sh
           set -e
-          
+
           if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ]; then
               # Make sure the wrapper script is executable
               chmod +x /usr/bin/rust-spooler
-          
+
               # Create config directory if it doesn't exist
               mkdir -p /etc/flux-spooler
-          
+
               # Reload systemd to recognize the new service file
               systemctl daemon-reload >/dev/null 2>&1 || true
-          
+
               # Enable service but don't start it
               echo "Flux print spooler service has been installed but not started."
               echo "Configure the service with: rust-spooler config"
               echo "Then start it with: systemctl start flux-spooler.service"
               echo "To enable at boot: systemctl enable flux-spooler.service"
           fi
-          
+
           exit 0
           EOF
           chmod 755 mypackage/DEBIAN/postinst
-          
+
           # Create pre-removal script
           cat > mypackage/DEBIAN/prerm << 'EOF'
           #!/bin/sh
           set -e
-          
+
           if [ "$1" = "remove" ]; then
               # Stop the service if it's running
               systemctl stop flux-spooler.service >/dev/null 2>&1 || true
               systemctl disable flux-spooler.service >/dev/null 2>&1 || true
           fi
-          
+
           exit 0
           EOF
           chmod 755 mypackage/DEBIAN/prerm
-          
+
+          # Create empty config directory and file for conffiles reference
+          mkdir -p mypackage/etc/flux-spooler
+          touch mypackage/etc/flux-spooler/config.json
+
           # Create conffiles
           cat > mypackage/DEBIAN/conffiles << 'EOF'
           /etc/flux-spooler/config.json
