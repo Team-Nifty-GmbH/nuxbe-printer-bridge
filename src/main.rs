@@ -14,6 +14,7 @@ mod config;
 mod models;
 mod services;
 mod utils;
+mod tests;
 
 use api::routes::{check_jobs_endpoint, check_printers_endpoint, get_printers, print_file};
 use config::load_config;
