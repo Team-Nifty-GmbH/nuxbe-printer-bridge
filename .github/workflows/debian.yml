@@ -64,17 +64,18 @@ jobs:
       - name: Create package directory structure
         run: |
           mkdir -p mypackage/DEBIAN
-          mkdir -p mypackage/usr/bin/x86_64
-          mkdir -p mypackage/usr/bin/arm64
+          # Use Debian multiarch conventions instead of putting binaries directly in /usr/bin
+          mkdir -p mypackage/usr/lib/x86_64-linux-gnu/flux-spooler
+          mkdir -p mypackage/usr/lib/aarch64-linux-gnu/flux-spooler
           mkdir -p mypackage/usr/bin
           mkdir -p mypackage/lib/systemd/system
 
       - name: Extract binary artifacts
         run: |
-          tar -xzf rust-spooler-x86_64-unknown-linux-musl.tar.gz -C mypackage/usr/bin/x86_64/
-          tar -xzf rust-spooler-aarch64-unknown-linux-musl.tar.gz -C mypackage/usr/bin/arm64/
-          chmod +x mypackage/usr/bin/x86_64/rust-spooler
-          chmod +x mypackage/usr/bin/arm64/rust-spooler
+          tar -xzf rust-spooler-x86_64-unknown-linux-musl.tar.gz -C mypackage/usr/lib/x86_64-linux-gnu/flux-spooler/
+          tar -xzf rust-spooler-aarch64-unknown-linux-musl.tar.gz -C mypackage/usr/lib/aarch64-linux-gnu/flux-spooler/
+          chmod +x mypackage/usr/lib/x86_64-linux-gnu/flux-spooler/rust-spooler
+          chmod +x mypackage/usr/lib/aarch64-linux-gnu/flux-spooler/rust-spooler
 
       - name: Create wrapper script
         run: |
@@ -84,9 +85,9 @@ jobs:
           
           ARCH=$(dpkg --print-architecture)
           if [ "$ARCH" = "arm64" ]; then
-              exec /usr/bin/arm64/rust-spooler "$@"
+              exec /usr/lib/aarch64-linux-gnu/flux-spooler/rust-spooler "$@"
           else
-              exec /usr/bin/x86_64/rust-spooler "$@"
+              exec /usr/lib/x86_64-linux-gnu/flux-spooler/rust-spooler "$@"
           fi
           EOF
           chmod +x mypackage/usr/bin/rust-spooler
