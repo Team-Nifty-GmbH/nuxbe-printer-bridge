@@ -31,22 +31,14 @@ jobs:
             else
               RELEASE_TAG="${{ github.event.inputs.tag_name }}"
             fi
-          else
-            RELEASE_TAG=${GITHUB_REF#refs/tags/}
-          fi
-          
           VERSION=${RELEASE_TAG#v}
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Using release tag: $RELEASE_TAG and version: $VERSION"
-
-      - name: Setup GitHub CLI
+      - name: Install Dependencies
         run: |
-          echo "Installing GitHub CLI"
-          # Print GitHub token's first few characters to check it exists (avoid printing the whole token)
-          echo "GitHub token check: ${GITHUB_TOKEN:0:5}..." 
-          gh auth status || gh auth login --with-token <<< "${{ secrets.GITHUB_TOKEN }}"
+          sudo apt-get update
+          sudo apt-get install -y curl jq --no-install-recommends
 
       - name: Debug release info
         run: |
@@ -55,23 +47,14 @@ jobs:
 
       - name: Download release assets
         run: |
-          # Create a directory for the assets
           mkdir -p release-assets
-          
-          # Try to download with more verbose output
           gh release download "${{ env.RELEASE_TAG }}" -p "*x86_64*.tar.gz" -D release-assets --verbose || echo "x86_64 asset not found"
           gh release download "${{ env.RELEASE_TAG }}" -p "*aarch64*.tar.gz" -D release-assets --verbose || echo "aarch64 asset not found"
-          
-          # List what was actually downloaded
           ls -la release-assets || echo "No assets directory or it's empty"
-          
-          # Check if we have the required files
           if [ ! -f "$(find release-assets -name "*x86_64*.tar.gz" | head -1)" ] || [ ! -f "$(find release-assets -name "*aarch64*.tar.gz" | head -1)" ]; then
             echo "Required assets not found! Exiting."
             exit 1
           fi
-          
-          # Copy files to working directory with expected names
           cp $(find release-assets -name "*x86_64*.tar.gz" | head -1) rust-spooler-x86_64-unknown-linux-musl.tar.gz
           cp $(find release-assets -name "*aarch64*.tar.gz" | head -1) rust-spooler-aarch64-unknown-linux-musl.tar.gz
 
@@ -83,19 +66,11 @@ jobs:
           mkdir -p mypackage/usr/bin
           mkdir -p mypackage/lib/systemd/system
 
-      - name: Extract binary artifacts
-        run: |
-          tar -xzf rust-spooler-x86_64-unknown-linux-musl.tar.gz -C mypackage/usr/lib/flux-cups-spooler/x86_64/
-          tar -xzf rust-spooler-aarch64-unknown-linux-musl.tar.gz -C mypackage/usr/lib/flux-cups-spooler/arm64/
-          chmod +x mypackage/usr/lib/flux-cups-spooler/x86_64/rust-spooler
-          chmod +x mypackage/usr/lib/flux-cups-spooler/arm64/rust-spooler
-
       - name: Create wrapper script
         run: |
           cat > mypackage/usr/bin/rust-spooler << 'EOF'
           #!/bin/sh
           # Architecture detection script for rust-spooler
-          
           ARCH=$(dpkg --print-architecture)
           if [ "$ARCH" = "arm64" ]; then
               exec /usr/lib/flux-cups-spooler/arm64/rust-spooler "$@"
@@ -130,19 +105,18 @@ jobs:
 
       - name: Create Debian control files
         run: |
-          # Create control file with FIXED architecture string (no spaces)
           cat > mypackage/DEBIAN/control << EOF
           Package: flux-cups-spooler
           Version: $VERSION
           Section: utils
           Priority: optional
           Architecture: all
-          Maintainer: Team Nifty <team@example.com>
+          Maintainer: Team Nifty <ms@team-nifty.com>
           Depends: cups, cups-client, libssl-dev
           Description: FLUX ERP to CUPS Print Server
            A bridge between FLUX ERP and CUPS printing system
            to manage printers and handle print jobs. It provides
-           a REST API, real-time WebSocket integration, and 
+           a REST API, real-time WebSocket integration, and
            automatic synchronization between systems.
           EOF
 
@@ -171,21 +145,6 @@ jobs:
           exit 0
           EOF
           chmod 755 mypackage/DEBIAN/postinst
-
-          # Create pre-removal script
-          cat > mypackage/DEBIAN/prerm << 'EOF'
-          #!/bin/sh
-          set -e
-
-          if [ "$1" = "remove" ]; then
-              # Stop the service if it's running
-              systemctl stop flux-spooler.service >/dev/null 2>&1 || true
-              systemctl disable flux-spooler.service >/dev/null 2>&1 || true
-          fi
-
-          exit 0
-          EOF
-          chmod 755 mypackage/DEBIAN/prerm
 
           # Create empty config directory and file for conffiles reference
           mkdir -p mypackage/etc/flux-spooler
