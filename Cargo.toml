@@ -18,7 +18,7 @@ clap = { version = "4.5", features = ["derive"] }
 cursive = { version = "0.21", default-features = false, features = ["crossterm-backend"] }
 reverb-rs = { git = "https://github.com/Team-Nifty-GmbH/reverb_rs", branch = "main" }
 async-trait = "0.1.86"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "std"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "std"] }
 openssl-sys = { version = "0.9", features = ["vendored"] }
 
 [features]
