@@ -8,6 +8,7 @@ use actix_web::{Error, HttpResponse, Responder, get, post, web};
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Client;
 use tempfile::NamedTempFile;
+use printers::get_printer_by_name;
 
 use crate::models::{Config, PrintRequest, PrinterList};
 use crate::services::print_job::fetch_print_jobs;
@@ -40,13 +41,8 @@ pub async fn print_file(
 ) -> Result<HttpResponse, Error> {
     let printer_name = &query.printer;
 
-    let lpstat_output = Command::new("lpstat")
-        .arg("-p")
-        .arg(printer_name)
-        .output()
-        .expect("Failed to execute lpstat command");
-
-    if !lpstat_output.status.success() {
+    // Check if printer exists using printers crate
+    if get_printer_by_name(printer_name).is_none() {
         return Ok(HttpResponse::BadRequest().body(format!("Printer '{}' not found", printer_name)));
     }
 

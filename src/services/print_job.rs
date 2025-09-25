@@ -1,10 +1,11 @@
 use reqwest::Client;
 use std::io::Write;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio::time;
+use printers::get_printers;
+use std::process::Command;
 
 use crate::models::{Config, PrintJob, PrintJobResponse, WebsocketPrintJob};
 
@@ -319,7 +320,7 @@ pub async fn fetch_print_jobs(
 async fn get_printer_name_by_id(printer_id: Option<u32>) -> String {
     // If printer_id is None, use a default printer
     if printer_id.is_none() {
-        return get_default_printer().await;
+        return get_default_printer_name().await;
     }
 
     let printer_id = printer_id.unwrap();
@@ -337,7 +338,7 @@ async fn get_printer_name_by_id(printer_id: Option<u32>) -> String {
     }
 
     // Fallback if no printer with that ID is found
-    get_default_printer().await
+    get_default_printer_name().await
 }
 
 /// Background task to periodically check for print jobs
@@ -381,28 +382,11 @@ pub async fn job_checker_task(config: Arc<Mutex<Config>>, http_client: Client) {
     }
 }
 
-async fn get_default_printer() -> String {
-    // Get the system's default printer, or use the first available printer
-    let lpstat_output = Command::new("lpstat").arg("-d").output();
-
-    if let Ok(output) = lpstat_output {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        if output_str.contains("system default destination: ") {
-            // Extract default printer name
-            if let Some(printer) = output_str
-                .lines()
-                .find(|line| line.contains("system default destination: "))
-                .and_then(|line| line.split("system default destination: ").nth(1))
-            {
-                return printer.trim().to_string();
-            }
-        }
-    }
-
-    // Fallback to first available printer
-    let printers = crate::services::printer::get_all_printers(false).await;
-    if !printers.is_empty() {
-        return printers[0].name.clone();
+async fn get_default_printer_name() -> String {
+    // Fallback to first available printer using printers crate
+    let system_printers = get_printers();
+    if !system_printers.is_empty() {
+        return system_printers[0].name.clone();
     }
 
     // Last resort

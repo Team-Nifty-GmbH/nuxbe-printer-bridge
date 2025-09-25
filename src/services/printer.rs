@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use actix_web::web;
+use printers::{get_printers, get_printer_by_name};
 use reqwest::Client;
 use tokio::time;
 
@@ -13,200 +13,44 @@ use crate::utils::printer_storage::{load_printers, save_printers};
 
 /// Get all available printers from the CUPS system
 pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
-    // Debug lpstat only if verbose debug is enabled
-    if verbose_debug {
-        let debug_output = Command::new("lpstat")
-            .arg("-a")
-            .output()
-            .expect("Failed to execute lpstat -a command");
-
-        println!(
-            "Debug lpstat -a: {}",
-            String::from_utf8_lossy(&debug_output.stdout)
-        );
-    }
-
-    let lpstat_output = Command::new("lpstat")
-        .arg("-a")
-        .output()
-        .expect("Failed to execute lpstat command");
-
-    let printer_list_str = String::from_utf8_lossy(&lpstat_output.stdout);
-    let printer_names: Vec<String> = printer_list_str
-        .lines()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if !parts.is_empty() {
-                Some(parts[0].to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let mut final_printer_names = printer_names;
-    if final_printer_names.is_empty() {
-        let alt_output = Command::new("lpstat")
-            .arg("-p")
-            .output()
-            .expect("Failed to execute lpstat -p command");
-
-        if verbose_debug {
-            println!(
-                "Debug lpstat -p: {}",
-                String::from_utf8_lossy(&alt_output.stdout)
-            );
-        }
-
-        let alt_list_str = String::from_utf8_lossy(&alt_output.stdout);
-        final_printer_names = alt_list_str
-            .lines()
-            .filter_map(|line| {
-                if line.starts_with("printer ") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        return Some(parts[1].to_string());
-                    }
-                }
-                None
-            })
-            .collect();
-    }
-
-    if final_printer_names.is_empty() {
-        let v_output = Command::new("lpstat")
-            .arg("-v")
-            .output()
-            .expect("Failed to execute lpstat -v command");
-
-        if verbose_debug {
-            println!(
-                "Debug lpstat -v: {}",
-                String::from_utf8_lossy(&v_output.stdout)
-            );
-        }
-
-        let v_list_str = String::from_utf8_lossy(&v_output.stdout);
-        final_printer_names = v_list_str
-            .lines()
-            .filter_map(|line| {
-                if line.starts_with("device for ") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 3 {
-                        return Some(parts[2].trim_end_matches(':').to_string());
-                    }
-                }
-                None
-            })
-            .collect();
-    }
-
-    if verbose_debug {
-        println!("Detected printers: {:?}", final_printer_names);
-    }
-
+    let system_printers = get_printers();
     let mut printers = Vec::new();
 
-    for name in final_printer_names {
-        // Try to get media sizes
-        let lpoptions_output = Command::new("lpoptions")
-            .arg("-p")
-            .arg(&name)
-            .arg("-l")
-            .output();
+    if verbose_debug {
+        println!("Found {} system printer(s)", system_printers.len());
+    }
 
-        let mut media_sizes = Vec::new();
-
-        if let Ok(output) = lpoptions_output {
-            let printer_options = String::from_utf8_lossy(&output.stdout);
-
-            for line in printer_options.lines() {
-                if line.starts_with("PageSize/")
-                    || line.starts_with("MediaSize/")
-                    || line.contains("media size")
-                {
-                    if let Some(options_part) = line.split(':').nth(1) {
-                        let sizes: Vec<String> = options_part
-                            .split_whitespace()
-                            .filter_map(|opt| {
-                                if opt.starts_with('*') {
-                                    Some(opt.trim_start_matches('*').to_string())
-                                } else {
-                                    Some(opt.to_string())
-                                }
-                            })
-                            .collect();
-                        media_sizes.extend(sizes);
-                    }
-                }
-            }
+    for system_printer in system_printers {
+        if verbose_debug {
+            println!("Processing printer: {}", system_printer.name);
         }
 
-        let mut description = String::new();
-        let mut location = String::new();
-        let mut make_and_model = String::new();
+        // Get detailed printer info if available
+        let detailed_info = get_printer_by_name(&system_printer.name);
 
-        let lpstat_p_output = Command::new("lpstat")
-            .arg("-l")
-            .arg("-p")
-            .arg(&name)
-            .output();
-
-        if let Ok(output) = lpstat_p_output {
-            let printer_info = String::from_utf8_lossy(&output.stdout);
-
-            for line in printer_info.lines() {
-                if line.contains("Description:") {
-                    description = line
-                        .split("Description:")
-                        .nth(1)
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
-                } else if line.contains("Location:") {
-                    location = line
-                        .split("Location:")
-                        .nth(1)
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
-                } else if line.contains("Make and Model:") {
-                    make_and_model = line
-                        .split("Make and Model:")
-                        .nth(1)
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
-                }
-            }
-        }
-
-        if description.is_empty() && make_and_model.is_empty() {
-            let lpinfo_output = Command::new("lpinfo").arg("-m").output();
-
-            if let Ok(output) = lpinfo_output {
-                let lpinfo_str = String::from_utf8_lossy(&output.stdout);
-
-                for line in lpinfo_str.lines() {
-                    if line.contains(&name) {
-                        let parts: Vec<&str> = line.split_whitespace().collect();
-                        if parts.len() > 1 {
-                            make_and_model = parts[1..].join(" ");
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        printers.push(Printer {
-            name,
-            description,
-            location,
-            make_and_model,
-            media_sizes,
+        let printer = Printer {
+            name: system_printer.name.clone(),
+            description: detailed_info
+                .as_ref()
+                .map(|p| p.description.clone())
+                .unwrap_or_else(|| system_printer.description.clone()),
+            location: detailed_info
+                .as_ref()
+                .map(|p| p.location.clone())
+                .unwrap_or_else(|| system_printer.location.clone()),
+            make_and_model: detailed_info
+                .as_ref()
+                .map(|p| p.driver_name.clone())
+                .unwrap_or_else(|| system_printer.driver_name.clone()),
+            media_sizes: Vec::new(), // The printers crate doesn't provide media_sizes, we'll need to get this separately if needed
             printer_id: None, // IDs will be populated from saved printers later
-        });
+        };
+
+        printers.push(printer);
+    }
+
+    if verbose_debug {
+        println!("Successfully processed {} printer(s)", printers.len());
     }
 
     printers
