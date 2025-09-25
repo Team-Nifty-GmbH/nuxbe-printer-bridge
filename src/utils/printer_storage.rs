@@ -29,6 +29,44 @@ pub fn load_printers() -> HashMap<String, Printer> {
     }
 }
 
+/// Check if printer maps are different (ignoring order)
+pub fn printers_have_changed(current: &HashMap<String, Printer>, saved: &HashMap<String, Printer>) -> bool {
+    // Quick check: different number of printers
+    if current.len() != saved.len() {
+        return true;
+    }
+
+    // Check if all printers in current exist in saved and are identical
+    for (name, current_printer) in current {
+        match saved.get(name) {
+            Some(saved_printer) => {
+                // Compare all relevant fields
+                if current_printer.description != saved_printer.description
+                    || current_printer.location != saved_printer.location
+                    || current_printer.make_and_model != saved_printer.make_and_model
+                    || current_printer.media_sizes != saved_printer.media_sizes
+                    || current_printer.printer_id != saved_printer.printer_id
+                {
+                    return true;
+                }
+            }
+            None => return true, // Printer exists in current but not in saved
+        }
+    }
+
+    false // No differences found
+}
+
+/// Save printers to JSON file only if they have changed
+pub fn save_printers_if_changed(printers: &HashMap<String, Printer>, saved_printers: &HashMap<String, Printer>) -> bool {
+    if !printers_have_changed(printers, saved_printers) {
+        return false; // No changes, no need to save
+    }
+
+    save_printers(printers);
+    true // Changes were saved
+}
+
 /// Save printers to JSON file
 pub fn save_printers(printers: &HashMap<String, Printer>) {
     let path = printers_file_path();

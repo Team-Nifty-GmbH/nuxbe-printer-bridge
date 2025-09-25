@@ -21,7 +21,7 @@ use config::load_config;
 use services::print_job::job_checker_task;
 use services::printer::{get_all_printers, printer_checker_task};
 use services::websocket::websocket_task;
-use utils::printer_storage::{load_printers, save_printers};
+use utils::printer_storage::{load_printers, save_printers_if_changed};
 use utils::tui::run_tui;
 
 /// Command line arguments for the application
@@ -100,29 +100,28 @@ async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
         let mut set = printers_set.lock().unwrap();
 
         // Load saved printers
-        let mut saved_printers = load_printers();
-        let mut updated = false;
+        let original_saved_printers = load_printers();
+        let mut updated_printers = original_saved_printers.clone();
 
         // Update saved printers with current system printers
         for printer in system_printers {
             set.insert(printer.name.clone());
 
             // If printer exists, preserve the printer_id
-            if let Some(saved_printer) = saved_printers.get(&printer.name) {
+            if let Some(saved_printer) = original_saved_printers.get(&printer.name) {
                 let mut updated_printer = printer.clone();
                 updated_printer.printer_id = saved_printer.printer_id;
-                saved_printers.insert(printer.name.clone(), updated_printer);
-                updated = true;
+                updated_printers.insert(printer.name.clone(), updated_printer);
             } else {
                 // New printer, add it
-                saved_printers.insert(printer.name.clone(), printer);
-                updated = true;
+                updated_printers.insert(printer.name.clone(), printer);
             }
         }
 
-        // Save updated printers if needed
-        if updated {
-            save_printers(&saved_printers);
+        // Save updated printers only if they changed
+        let printers_were_updated = save_printers_if_changed(&updated_printers, &original_saved_printers);
+        if printers_were_updated {
+            println!("Initial printer configuration updated - saved {} printers", updated_printers.len());
         }
     }
 

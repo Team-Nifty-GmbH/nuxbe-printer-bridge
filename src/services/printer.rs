@@ -9,7 +9,7 @@ use tokio::time;
 
 use crate::models::{Config, Printer};
 use crate::services::printer_sync::sync_printers_with_api;
-use crate::utils::printer_storage::{load_printers, save_printers};
+use crate::utils::printer_storage::{load_printers, save_printers_if_changed};
 
 /// Get all available printers from the CUPS system
 pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
@@ -107,8 +107,11 @@ pub async fn check_for_new_printers(
         }
     };
 
-    // Save the updated printers
-    save_printers(&updated_printers);
+    // Save the updated printers only if they have changed
+    let printers_were_updated = save_printers_if_changed(&updated_printers, &saved_printers);
+    if printers_were_updated {
+        println!("Printer configuration updated - saved {} printers", updated_printers.len());
+    }
 
     // Update the printers_data set with current printer names
     {
