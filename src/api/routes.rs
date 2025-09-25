@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex};
 use actix_multipart::Multipart;
 use actix_web::{Error, HttpResponse, Responder, get, post, web};
 use futures::{StreamExt, TryStreamExt};
+use printers::common::base::job::PrinterJobOptions;
+use printers::get_printer_by_name;
 use reqwest::Client;
 use tempfile::NamedTempFile;
-use printers::get_printer_by_name;
-use printers::common::base::job::PrinterJobOptions;
 
 use crate::models::{Config, PrintRequest, PrinterList};
 use crate::services::print_job::fetch_print_jobs;
@@ -80,7 +80,10 @@ pub async fn print_file(
 
                         match printer.print_file(temp_path, job_options) {
                             Ok(job_id) => {
-                                return Ok(HttpResponse::Ok().body(format!("Print job submitted successfully (Job ID: {})", job_id)));
+                                return Ok(HttpResponse::Ok().body(format!(
+                                    "Print job submitted successfully (Job ID: {})",
+                                    job_id
+                                )));
                             }
                             Err(e) => {
                                 return Ok(HttpResponse::InternalServerError()

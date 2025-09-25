@@ -30,7 +30,10 @@ pub fn load_printers() -> HashMap<String, Printer> {
 }
 
 /// Check if printer maps are different (ignoring order)
-pub fn printers_have_changed(current: &HashMap<String, Printer>, saved: &HashMap<String, Printer>) -> bool {
+pub fn printers_have_changed(
+    current: &HashMap<String, Printer>,
+    saved: &HashMap<String, Printer>,
+) -> bool {
     // Quick check: different number of printers
     if current.len() != saved.len() {
         return true;
@@ -58,7 +61,10 @@ pub fn printers_have_changed(current: &HashMap<String, Printer>, saved: &HashMap
 }
 
 /// Save printers to JSON file only if they have changed
-pub fn save_printers_if_changed(printers: &HashMap<String, Printer>, saved_printers: &HashMap<String, Printer>) -> bool {
+pub fn save_printers_if_changed(
+    printers: &HashMap<String, Printer>,
+    saved_printers: &HashMap<String, Printer>,
+) -> bool {
     if !printers_have_changed(printers, saved_printers) {
         return false; // No changes, no need to save
     }

@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::models::api::{ApiPrinter, ApiPrinterResponse};
 use crate::models::{Config, Printer};
+use crate::utils::http::with_auth_header;
 
 /// Synchronize printers with the API server following the specified order
 pub async fn sync_printers_with_api(
@@ -132,15 +133,7 @@ async fn fetch_printers_from_api(
 ) -> Result<Vec<ApiPrinter>, Box<dyn std::error::Error>> {
     let api_url = format!("{}/api/printers", config.flux_url);
 
-    let response = http_client
-        .get(&api_url)
-        .header(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                config.flux_api_token.as_ref().unwrap_or(&"".to_string())
-            ),
-        )
+    let response = with_auth_header(http_client.get(&api_url), config)
         .header("Accept", "application/json")
         .json(&serde_json::json!({
             "instance_name": config.instance_name
@@ -173,15 +166,7 @@ async fn create_printer_in_api(
     let mut api_printer: ApiPrinter = printer.into();
     api_printer.spooler_name = config.instance_name.clone(); // Set spooler_name instead of printer_server
 
-    let response = http_client
-        .post(&api_url)
-        .header(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                config.flux_api_token.as_ref().unwrap_or(&"".to_string())
-            ),
-        )
+    let response = with_auth_header(http_client.post(&api_url), config)
         .header("Accept", "application/json")
         .json(&api_printer)
         .send()
@@ -229,15 +214,7 @@ async fn update_printer_in_api(
     let mut api_printer: ApiPrinter = printer.into();
     api_printer.spooler_name = config.instance_name.clone();
 
-    let response = http_client
-        .put(&api_url)
-        .header(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                config.flux_api_token.as_ref().unwrap_or(&"".to_string())
-            ),
-        )
+    let response = with_auth_header(http_client.put(&api_url), config)
         .header("Accept", "application/json")
         .json(&api_printer)
         .send()
@@ -266,15 +243,7 @@ async fn delete_printer_from_api(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let api_url = format!("{}/api/printers/{}", config.flux_url, printer_id);
 
-    let response = http_client
-        .delete(&api_url)
-        .header(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                config.flux_api_token.as_ref().unwrap_or(&"".to_string())
-            ),
-        )
+    let response = with_auth_header(http_client.delete(&api_url), config)
         .header("Accept", "application/json")
         .json(&serde_json::json!({
             "spooler_name": config.instance_name // Changed from instance_name

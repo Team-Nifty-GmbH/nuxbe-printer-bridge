@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use actix_web::web;
-use printers::{get_printers, get_printer_by_name};
+use printers::{get_printer_by_name, get_printers};
 use reqwest::Client;
 use tokio::time;
 
@@ -43,7 +43,7 @@ pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
                 .map(|p| p.driver_name.clone())
                 .unwrap_or_else(|| system_printer.driver_name.clone()),
             media_sizes: Vec::new(), // The printers crate doesn't provide media_sizes, we'll need to get this separately if needed
-            printer_id: None, // IDs will be populated from saved printers later
+            printer_id: None,        // IDs will be populated from saved printers later
         };
 
         printers.push(printer);
@@ -110,7 +110,10 @@ pub async fn check_for_new_printers(
     // Save the updated printers only if they have changed
     let printers_were_updated = save_printers_if_changed(&updated_printers, &saved_printers);
     if printers_were_updated {
-        println!("Printer configuration updated - saved {} printers", updated_printers.len());
+        println!(
+            "Printer configuration updated - saved {} printers",
+            updated_printers.len()
+        );
     }
 
     // Update the printers_data set with current printer names

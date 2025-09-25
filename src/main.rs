@@ -119,9 +119,13 @@ async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
         }
 
         // Save updated printers only if they changed
-        let printers_were_updated = save_printers_if_changed(&updated_printers, &original_saved_printers);
+        let printers_were_updated =
+            save_printers_if_changed(&updated_printers, &original_saved_printers);
         if printers_were_updated {
-            println!("Initial printer configuration updated - saved {} printers", updated_printers.len());
+            println!(
+                "Initial printer configuration updated - saved {} printers",
+                updated_printers.len()
+            );
         }
     }
 

@@ -1,13 +1,14 @@
+use printers::common::base::job::PrinterJobOptions;
+use printers::{get_printer_by_name, get_printers};
 use reqwest::Client;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio::time;
-use printers::{get_printers, get_printer_by_name};
-use printers::common::base::job::PrinterJobOptions;
 
 use crate::models::{Config, PrintJob, PrintJobResponse, WebsocketPrintJob};
+use crate::utils::http::with_auth_header;
 
 /// Process a print job received through WebSocket
 // Update handle_print_job to use the new format when needed
@@ -37,15 +38,7 @@ pub async fn handle_print_job(
     );
 
     // Download the file
-    let file_response = http_client
-        .get(&file_url)
-        .header(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                config.flux_api_token.as_ref().unwrap_or(&String::new())
-            ),
-        )
+    let file_response = with_auth_header(http_client.get(&file_url), config)
         .header("Accept", "application/octet-stream") // Add this to request binary data
         .send()
         .await?;
@@ -78,9 +71,7 @@ pub async fn handle_print_job(
                 Ok(job_id) => {
                     println!(
                         "Successfully printed media ID {} on printer {} (Job ID: {})",
-                        print_job.media_id,
-                        print_job.printer_name,
-                        job_id
+                        print_job.media_id, print_job.printer_name, job_id
                     );
 
                     // Update print job status to is_printed = true
@@ -96,9 +87,7 @@ pub async fn handle_print_job(
                 Err(e) => {
                     let error_msg = format!(
                         "Failed to print media ID {} on printer {}: {}",
-                        print_job.media_id,
-                        print_job.printer_name,
-                        e
+                        print_job.media_id, print_job.printer_name, e
                     );
                     eprintln!("{}", error_msg);
                     Err(error_msg.into())
@@ -108,8 +97,7 @@ pub async fn handle_print_job(
         None => {
             let error_msg = format!(
                 "Printer '{}' not found for media ID {}",
-                print_job.printer_name,
-                print_job.media_id
+                print_job.printer_name, print_job.media_id
             );
             eprintln!("{}", error_msg);
             Err(error_msg.into())
@@ -125,15 +113,7 @@ async fn update_print_job_status(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let url = format!("{}/api/print-jobs", config.flux_url);
 
-    let response = http_client
-        .put(&url)
-        .header(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                config.flux_api_token.as_ref().unwrap_or(&String::new())
-            ),
-        )
+    let response = with_auth_header(http_client.put(&url), config)
         .header("Accept", "application/json")
         .json(&serde_json::json!({
             "id": job_id,
@@ -168,15 +148,7 @@ pub async fn fetch_print_jobs(
 
     //println!("Fetching print jobs from URL: {}", jobs_url);
 
-    let response = http_client
-        .get(&jobs_url)
-        .header(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                config.flux_api_token.as_ref().unwrap_or(&String::new())
-            ),
-        )
+    let response = with_auth_header(http_client.get(&jobs_url), config)
         .header("Accept", "application/json")
         .json(&serde_json::json!({
             "spooler_name": config.instance_name,
@@ -269,15 +241,7 @@ pub async fn fetch_print_jobs(
             let file_url = format!("{}/api/media/private/{}", config.flux_url, job.media_id);
 
             // Download the file
-            let file_response = http_client
-                .get(&file_url)
-                .header(
-                    "Authorization",
-                    format!(
-                        "Bearer {}",
-                        config.flux_api_token.as_ref().unwrap_or(&String::new())
-                    ),
-                )
+            let file_response = with_auth_header(http_client.get(&file_url), config)
                 .header("Accept", "application/octet-stream")
                 .send()
                 .await?;
@@ -310,22 +274,19 @@ pub async fn fetch_print_jobs(
                         Ok(print_job_id) => {
                             println!(
                                 "Successfully printed job {} (Print Job ID: {})",
-                                job.id,
-                                print_job_id
+                                job.id, print_job_id
                             );
 
                             // Update job status to is_printed = true
                             match update_print_job_status(job.id, true, http_client, config).await {
-                                Ok(_) => println!("Updated print job {} status to completed", job.id),
+                                Ok(_) => {
+                                    println!("Updated print job {} status to completed", job.id)
+                                }
                                 Err(e) => eprintln!("Failed to update print job status: {}", e),
                             }
                         }
                         Err(e) => {
-                            eprintln!(
-                                "Failed to print job {}: {}",
-                                job.id,
-                                e
-                            );
+                            eprintln!("Failed to print job {}: {}", job.id, e);
                         }
                     }
                 }
