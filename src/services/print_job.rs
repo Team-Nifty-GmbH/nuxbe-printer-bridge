@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio::time;
-use printers::get_printers;
-use std::process::Command;
+use printers::{get_printers, get_printer_by_name};
+use printers::common::base::job::PrinterJobOptions;
 
 use crate::models::{Config, PrintJob, PrintJobResponse, WebsocketPrintJob};
 
@@ -66,39 +66,54 @@ pub async fn handle_print_job(
     temp_file.write_all(&file_content)?;
     let temp_path = temp_file.path().to_str().unwrap();
 
-    // Print the file
-    let output = Command::new("lp")
-        .arg("-d")
-        .arg(&print_job.printer_name)
-        .arg(temp_path)
-        .output()?;
+    // Print the file using printers crate
+    match get_printer_by_name(&print_job.printer_name) {
+        Some(printer) => {
+            let job_options = PrinterJobOptions {
+                name: Some(&format!("Media ID {}", print_job.media_id)),
+                ..PrinterJobOptions::none()
+            };
 
-    if output.status.success() {
-        println!(
-            "Successfully printed media ID {} on printer {}: {}",
-            print_job.media_id,
-            print_job.printer_name,
-            String::from_utf8_lossy(&output.stdout)
-        );
+            match printer.print_file(temp_path, job_options) {
+                Ok(job_id) => {
+                    println!(
+                        "Successfully printed media ID {} on printer {} (Job ID: {})",
+                        print_job.media_id,
+                        print_job.printer_name,
+                        job_id
+                    );
 
-        // Update print job status to is_printed = true
-        if let Some(job_id) = print_job.job_id {
-            match update_print_job_status(job_id, true, http_client, config).await {
-                Ok(_) => println!("Updated print job {} status to completed", job_id),
-                Err(e) => eprintln!("Failed to update print job status: {}", e),
+                    // Update print job status to is_printed = true
+                    if let Some(job_id) = print_job.job_id {
+                        match update_print_job_status(job_id, true, http_client, config).await {
+                            Ok(_) => println!("Updated print job {} status to completed", job_id),
+                            Err(e) => eprintln!("Failed to update print job status: {}", e),
+                        }
+                    }
+
+                    Ok(())
+                }
+                Err(e) => {
+                    let error_msg = format!(
+                        "Failed to print media ID {} on printer {}: {}",
+                        print_job.media_id,
+                        print_job.printer_name,
+                        e
+                    );
+                    eprintln!("{}", error_msg);
+                    Err(error_msg.into())
+                }
             }
         }
-
-        Ok(())
-    } else {
-        let error_msg = format!(
-            "Failed to print media ID {} on printer {}: {}",
-            print_job.media_id,
-            print_job.printer_name,
-            String::from_utf8_lossy(&output.stderr)
-        );
-        eprintln!("{}", error_msg);
-        Err(error_msg.into())
+        None => {
+            let error_msg = format!(
+                "Printer '{}' not found for media ID {}",
+                print_job.printer_name,
+                print_job.media_id
+            );
+            eprintln!("{}", error_msg);
+            Err(error_msg.into())
+        }
     }
 }
 
@@ -283,31 +298,40 @@ pub async fn fetch_print_jobs(
             temp_file.write_all(&file_content)?;
             let temp_path = temp_file.path().to_str().unwrap();
 
-            // Print the file
-            let output = Command::new("lp")
-                .arg("-d")
-                .arg(&printer_name)
-                .arg(temp_path)
-                .output()?;
+            // Print the file using printers crate
+            match get_printer_by_name(&printer_name) {
+                Some(printer) => {
+                    let job_options = PrinterJobOptions {
+                        name: Some(&format!("Print Job {}", job.id)),
+                        ..PrinterJobOptions::none()
+                    };
 
-            if output.status.success() {
-                println!(
-                    "Successfully printed job {}: {}",
-                    job.id,
-                    String::from_utf8_lossy(&output.stdout)
-                );
+                    match printer.print_file(temp_path, job_options) {
+                        Ok(print_job_id) => {
+                            println!(
+                                "Successfully printed job {} (Print Job ID: {})",
+                                job.id,
+                                print_job_id
+                            );
 
-                // Update job status to is_printed = true
-                match update_print_job_status(job.id, true, http_client, config).await {
-                    Ok(_) => println!("Updated print job {} status to completed", job.id),
-                    Err(e) => eprintln!("Failed to update print job status: {}", e),
+                            // Update job status to is_printed = true
+                            match update_print_job_status(job.id, true, http_client, config).await {
+                                Ok(_) => println!("Updated print job {} status to completed", job.id),
+                                Err(e) => eprintln!("Failed to update print job status: {}", e),
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "Failed to print job {}: {}",
+                                job.id,
+                                e
+                            );
+                        }
+                    }
                 }
-            } else {
-                eprintln!(
-                    "Failed to print job {}: {}",
-                    job.id,
-                    String::from_utf8_lossy(&output.stderr)
-                );
+                None => {
+                    eprintln!("Printer '{}' not found for job {}", printer_name, job.id);
+                }
             }
         }
     } else {

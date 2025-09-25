@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::io::Write;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use actix_multipart::Multipart;
@@ -9,6 +8,7 @@ use futures::{StreamExt, TryStreamExt};
 use reqwest::Client;
 use tempfile::NamedTempFile;
 use printers::get_printer_by_name;
+use printers::common::base::job::PrinterJobOptions;
 
 use crate::models::{Config, PrintRequest, PrinterList};
 use crate::services::print_job::fetch_print_jobs;
@@ -41,10 +41,7 @@ pub async fn print_file(
 ) -> Result<HttpResponse, Error> {
     let printer_name = &query.printer;
 
-    // Check if printer exists using printers crate
-    if get_printer_by_name(printer_name).is_none() {
-        return Ok(HttpResponse::BadRequest().body(format!("Printer '{}' not found", printer_name)));
-    }
+    // Printer existence will be checked when we try to print
 
     // Process uploaded file
     while let Ok(Some(mut field)) = payload.try_next().await {
@@ -73,23 +70,28 @@ pub async fn print_file(
                     println!("Printing file from temp path: {}", temp_path);
                 }
 
-                // Print the file using lp command
-                let output = Command::new("lp")
-                    .arg("-d")
-                    .arg(printer_name)
-                    .arg(temp_path)
-                    .output()
-                    .expect("Failed to execute lp command");
+                // Print the file using printers crate
+                match get_printer_by_name(printer_name) {
+                    Some(printer) => {
+                        let job_options = PrinterJobOptions {
+                            name: Some("API Print Job"),
+                            ..PrinterJobOptions::none()
+                        };
 
-                if output.status.success() {
-                    let success_msg = String::from_utf8_lossy(&output.stdout);
-                    return Ok(
-                        HttpResponse::Ok().body(format!("Print job submitted: {}", success_msg))
-                    );
-                } else {
-                    let error_msg = String::from_utf8_lossy(&output.stderr);
-                    return Ok(HttpResponse::InternalServerError()
-                        .body(format!("Print failed: {}", error_msg)));
+                        match printer.print_file(temp_path, job_options) {
+                            Ok(job_id) => {
+                                return Ok(HttpResponse::Ok().body(format!("Print job submitted successfully (Job ID: {})", job_id)));
+                            }
+                            Err(e) => {
+                                return Ok(HttpResponse::InternalServerError()
+                                    .body(format!("Print failed: {}", e)));
+                            }
+                        }
+                    }
+                    None => {
+                        return Ok(HttpResponse::BadRequest()
+                            .body(format!("Printer '{}' not found", printer_name)));
+                    }
                 }
             }
         }
