@@ -145,7 +145,10 @@ pub async fn fetch_print_jobs(
     config: &mut Config,
 ) -> Result<Vec<PrintJob>, Box<dyn std::error::Error>> {
     // Construct the URL for fetching print jobs
-    let jobs_url = format!("{}/api/print-jobs?filter[printer.spooler_name]={}&filter[is_completed]=false", config.flux_url, config.instance_name);
+    let jobs_url = format!(
+        "{}/api/print-jobs?filter[printer.spooler_name]={}&filter[is_completed]=false",
+        config.flux_url, config.instance_name
+    );
 
     //println!("Fetching print jobs from URL: {}", jobs_url);
 
@@ -202,8 +205,18 @@ pub async fn fetch_print_jobs(
 
                 // Try to show the part of JSON where error occurred
                 if error_context.contains("line") && error_context.contains("column") {
-                    if let Ok(err_line) = error_context.split_whitespace().nth(2).unwrap_or("0").parse::<usize>() {
-                        if let Ok(err_col) = error_context.split_whitespace().nth(5).unwrap_or("0").parse::<usize>() {
+                    if let Ok(err_line) = error_context
+                        .split_whitespace()
+                        .nth(2)
+                        .unwrap_or("0")
+                        .parse::<usize>()
+                    {
+                        if let Ok(err_col) = error_context
+                            .split_whitespace()
+                            .nth(5)
+                            .unwrap_or("0")
+                            .parse::<usize>()
+                        {
                             let lines: Vec<&str> = response_text.lines().collect();
                             if err_line <= lines.len() {
                                 let line = lines[err_line - 1];
@@ -229,7 +242,10 @@ pub async fn fetch_print_jobs(
 
         // Process each job
         for job in &jobs {
-            println!("Processing print job {} for printer ID {:?}", job.id, job.printer_id);
+            println!(
+                "Processing print job {} for printer ID {:?}",
+                job.id, job.printer_id
+            );
 
             // Get printer name based on printer_id (which may be None)
             let printer_name = get_printer_name_by_id(job.printer_id).await;

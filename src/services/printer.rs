@@ -252,7 +252,7 @@ pub async fn check_for_new_printers(
         &config_clone,
         verbose_debug,
     )
-        .await;
+    .await;
 
     let updated_printers = match sync_result {
         Ok(printers) => printers,
@@ -303,7 +303,7 @@ pub async fn printer_checker_task(
         config_data.clone(),
         verbose_debug,
     )
-        .await
+    .await
     {
         Ok(new_printers) => {
             if !new_printers.is_empty() {
@@ -329,7 +329,7 @@ pub async fn printer_checker_task(
             config_data.clone(),
             verbose_debug,
         )
-            .await
+        .await
         {
             Ok(new_printers) => {
                 if !new_printers.is_empty() {

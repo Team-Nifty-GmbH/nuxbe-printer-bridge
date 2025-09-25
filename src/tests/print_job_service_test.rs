@@ -34,7 +34,10 @@ async fn test_fetch_jobs_setup() {
     };
 
     // Log test information without executing the function
-    println!("Testing fetch_print_jobs for instance: {}", config.instance_name);
+    println!(
+        "Testing fetch_print_jobs for instance: {}",
+        config.instance_name
+    );
     println!("API URL: {}", config.flux_url);
 
     // Just test that the config is set up correctly

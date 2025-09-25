@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use actix_web::{App, HttpServer, web};
-use clap::{Parser, Subcommand, ArgAction};
+use clap::{ArgAction, Parser, Subcommand};
 use local_ip_address::local_ip;
 use reqwest::Client;
 use tracing_subscriber::EnvFilter;
@@ -13,8 +13,8 @@ mod api;
 mod config;
 mod models;
 mod services;
-mod utils;
 mod tests;
+mod utils;
 
 use api::routes::{check_jobs_endpoint, check_printers_endpoint, get_printers, print_file};
 use config::load_config;
@@ -67,9 +67,7 @@ async fn main() -> std::io::Result<()> {
     };
 
     // Initialize the tracing subscriber with the configured filter
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .init();
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     // Handle subcommands
     match cli.command {
@@ -134,7 +132,13 @@ async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
     let http_client_checker = http_client.clone();
 
     tokio::spawn(async move {
-        printer_checker_task(printers_set_clone, config_checker, http_client_checker, verbose_debug).await;
+        printer_checker_task(
+            printers_set_clone,
+            config_checker,
+            http_client_checker,
+            verbose_debug,
+        )
+        .await;
     });
 
     // Spawn job checker task
@@ -175,7 +179,7 @@ async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
             .service(check_jobs_endpoint)
             .service(check_printers_endpoint)
     })
-        .bind(format!("0.0.0.0:{}", api_port))?;
+    .bind(format!("0.0.0.0:{}", api_port))?;
 
     api_server.run().await?;
 

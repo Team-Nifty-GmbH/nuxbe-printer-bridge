@@ -52,48 +52,49 @@ pub async fn print_file(
 
     // Process uploaded file
     while let Ok(Some(mut field)) = payload.try_next().await {
-        // Get the content disposition directly
-        let content_disposition = field.content_disposition();
+        // Get the content disposition and check if a filename exists
+        if let Some(content_disposition) = field.content_disposition() {
+            if let Some(filename) = content_disposition.get_filename() {
+                let filename_str = filename.to_string();
 
-        // Check if a filename exists
-        if let Some(filename) = content_disposition.get_filename() {
-            let filename_str = filename.to_string();
+                if **verbose_debug {
+                    println!("Processing file upload: {}", filename_str);
+                }
 
-            if **verbose_debug {
-                println!("Processing file upload: {}", filename_str);
-            }
+                // Create a temporary file to store the uploaded content
+                let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
 
-            // Create a temporary file to store the uploaded content
-            let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+                // Write file contents to temp file
+                while let Some(chunk) = field.next().await {
+                    let data = chunk?;
+                    temp_file.write_all(&data)?;
+                }
 
-            // Write file contents to temp file
-            while let Some(chunk) = field.next().await {
-                let data = chunk?;
-                temp_file.write_all(&data)?;
-            }
+                // Get path to temp file
+                let temp_path = temp_file.path().to_str().unwrap();
 
-            // Get path to temp file
-            let temp_path = temp_file.path().to_str().unwrap();
+                if **verbose_debug {
+                    println!("Printing file from temp path: {}", temp_path);
+                }
 
-            if **verbose_debug {
-                println!("Printing file from temp path: {}", temp_path);
-            }
+                // Print the file using lp command
+                let output = Command::new("lp")
+                    .arg("-d")
+                    .arg(printer_name)
+                    .arg(temp_path)
+                    .output()
+                    .expect("Failed to execute lp command");
 
-            // Print the file using lp command
-            let output = Command::new("lp")
-                .arg("-d")
-                .arg(printer_name)
-                .arg(temp_path)
-                .output()
-                .expect("Failed to execute lp command");
-
-            if output.status.success() {
-                let success_msg = String::from_utf8_lossy(&output.stdout);
-                return Ok(HttpResponse::Ok().body(format!("Print job submitted: {}", success_msg)));
-            } else {
-                let error_msg = String::from_utf8_lossy(&output.stderr);
-                return Ok(HttpResponse::InternalServerError()
-                    .body(format!("Print failed: {}", error_msg)));
+                if output.status.success() {
+                    let success_msg = String::from_utf8_lossy(&output.stdout);
+                    return Ok(
+                        HttpResponse::Ok().body(format!("Print job submitted: {}", success_msg))
+                    );
+                } else {
+                    let error_msg = String::from_utf8_lossy(&output.stderr);
+                    return Ok(HttpResponse::InternalServerError()
+                        .body(format!("Print failed: {}", error_msg)));
+                }
             }
         }
     }

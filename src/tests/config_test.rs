@@ -29,7 +29,10 @@ fn test_temp_dir_creation() {
     // This is useful for future tests that need isolated storage
     let (dir, config_path) = setup_test_config_dir();
 
-    println!("Created temporary config directory: {}", config_path.display());
+    println!(
+        "Created temporary config directory: {}",
+        config_path.display()
+    );
     assert!(config_path.exists());
 
     // Directory will be automatically cleaned up when 'dir' goes out of scope

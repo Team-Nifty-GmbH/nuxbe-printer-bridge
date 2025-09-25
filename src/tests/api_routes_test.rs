@@ -1,12 +1,12 @@
 // src/tests/api_routes_test.rs
 #[cfg(test)]
 pub mod api_tests {
-    use actix_web::{test, web, App};
+    use actix_web::{App, test, web};
+    use reqwest::Client;
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
-    use reqwest::Client;
 
-    use crate::api::routes::{get_printers, check_jobs_endpoint, check_printers_endpoint};
+    use crate::api::routes::{check_jobs_endpoint, check_printers_endpoint, get_printers};
 
     #[actix_web::test]
     async fn test_get_printers_endpoint() {
@@ -14,8 +14,9 @@ pub mod api_tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(false)) // verbose_debug flag
-                .service(get_printers)
-        ).await;
+                .service(get_printers),
+        )
+        .await;
 
         // Make a request to the endpoint
         let req = test::TestRequest::get().uri("/printers").to_request();
@@ -37,8 +38,9 @@ pub mod api_tests {
             App::new()
                 .app_data(web::Data::new(Arc::clone(&config)))
                 .app_data(web::Data::new(http_client.clone()))
-                .service(check_jobs_endpoint)
-        ).await;
+                .service(check_jobs_endpoint),
+        )
+        .await;
 
         // Make a request to the endpoint
         let req = test::TestRequest::get().uri("/check_jobs").to_request();
@@ -63,8 +65,9 @@ pub mod api_tests {
                 .app_data(web::Data::new(Arc::clone(&config)))
                 .app_data(web::Data::new(http_client.clone()))
                 .app_data(web::Data::new(false)) // verbose_debug flag
-                .service(check_printers_endpoint)
-        ).await;
+                .service(check_printers_endpoint),
+        )
+        .await;
 
         // Make a request to the endpoint
         let req = test::TestRequest::get().uri("/check_printers").to_request();

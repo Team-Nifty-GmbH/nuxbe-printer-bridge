@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "rust-mcp-server": {
+      "command": "rust-mcp-server",
+      "args": [
+        "--log-level", "info",
+        "--log-file", "rust-mcp-server.log",
+        "--timeout", "600"
+      ],
+      "env": {},
+      "disabled": false
+    }
+  }
+}

@@ -1,4 +1,4 @@
-use actix_web::{test, web, App};
+use actix_web::{App, test, web};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
@@ -21,8 +21,9 @@ async fn test_api_server_integration() {
             .app_data(web::Data::new(Arc::clone(&printers_set)))
             .app_data(web::Data::new(http_client.clone()))
             .app_data(web::Data::new(verbose_debug))
-            .service(get_printers)
-    ).await;
+            .service(get_printers),
+    )
+    .await;
 
     // Test the /printers endpoint
     let req = test::TestRequest::get().uri("/printers").to_request();

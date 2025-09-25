@@ -47,7 +47,7 @@ fn create_config_dialog(siv: &mut Cursive, config: Arc<Mutex<Config>>) {
                         TextView::new(
                             "Changes will be applied after saving and restarting the server.",
                         )
-                            .h_align(HAlign::Center),
+                        .h_align(HAlign::Center),
                     ),
             )
             .button("Save", move |s| {
@@ -78,7 +78,7 @@ fn create_server_settings(config: &Config) -> impl View {
                         .with_name("api_port"),
                 ),
         )
-            .title("Server Settings"),
+        .title("Server Settings"),
     )
 }
 
@@ -101,7 +101,7 @@ fn create_interval_settings(config: &Config) -> impl View {
                         .with_name("job_check_interval"),
                 ),
         )
-            .title("Polling Intervals"),
+        .title("Polling Intervals"),
     )
 }
 
@@ -127,7 +127,7 @@ fn create_api_settings(config: &Config) -> impl View {
                         .with_name("flux_api_token"),
                 ),
         )
-            .title("API Integration"),
+        .title("API Integration"),
     )
 }
 
@@ -177,11 +177,7 @@ fn create_reverb_settings(config: &Config) -> impl View {
     // Safely get the host string or use empty string if None
     let host_value = config.reverb_host.clone().unwrap_or_default();
 
-    layout.add_child(
-        EditView::new()
-            .content(host_value)
-            .with_name("reverb_host"),
-    );
+    layout.add_child(EditView::new().content(host_value).with_name("reverb_host"));
 
     layout.add_child(TextView::new("Reverb Auth Endpoint"));
     layout.add_child(

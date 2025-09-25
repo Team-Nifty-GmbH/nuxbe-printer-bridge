@@ -60,21 +60,6 @@ pub struct PrinterList {
     pub printers: Vec<Printer>,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct PrinterNotification {
-    pub action: String,
-    pub printer: Printer,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct PrintJobCreateRequest {
-    pub media_id: u32,
-    pub printer_id: u32,
-    pub user_id: Option<u32>,
-    pub quantity: u32,
-    pub size: String,
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PageLink {
     pub url: Option<String>,
@@ -88,11 +73,6 @@ pub struct WebsocketPrintJob {
     pub spooler_name: String,
     pub media_id: String,
     pub job_id: Option<u32>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ConfigUpdateRequest {
-    pub config: Config,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
