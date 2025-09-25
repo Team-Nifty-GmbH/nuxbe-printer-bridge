@@ -18,16 +18,12 @@ use crate::utils::printer_storage::load_printers;
 /// GET /printers - List all available printers
 #[get("/printers")]
 pub async fn get_printers(verbose_debug: web::Data<bool>) -> impl Responder {
-    // Load printers from storage first
     let saved_printers = load_printers();
 
     if !saved_printers.is_empty() {
-        // Return the saved printers with their printer_ids
         let printers = saved_printers.values().cloned().collect();
         return HttpResponse::Ok().json(PrinterList { printers });
     }
-
-    // Fallback to getting printers from the system
     let printers = get_all_printers(**verbose_debug).await;
     HttpResponse::Ok().json(PrinterList { printers })
 }
@@ -41,11 +37,7 @@ pub async fn print_file(
 ) -> Result<HttpResponse, Error> {
     let printer_name = &query.printer;
 
-    // Printer existence will be checked when we try to print
-
-    // Process uploaded file
     while let Ok(Some(mut field)) = payload.try_next().await {
-        // Get the content disposition and check if a filename exists
         if let Some(content_disposition) = field.content_disposition() {
             if let Some(filename) = content_disposition.get_filename() {
                 let filename_str = filename.to_string();
@@ -54,23 +46,18 @@ pub async fn print_file(
                     println!("Processing file upload: {}", filename_str);
                 }
 
-                // Create a temporary file to store the uploaded content
                 let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
 
-                // Write file contents to temp file
                 while let Some(chunk) = field.next().await {
                     let data = chunk?;
                     temp_file.write_all(&data)?;
                 }
 
-                // Get path to temp file
                 let temp_path = temp_file.path().to_str().unwrap();
 
                 if **verbose_debug {
                     println!("Printing file from temp path: {}", temp_path);
                 }
-
-                // Print the file using printers crate
                 match get_printer_by_name(printer_name) {
                     Some(printer) => {
                         let job_options = PrinterJobOptions {
@@ -109,7 +96,6 @@ pub async fn check_jobs_endpoint(
     config: web::Data<Arc<Mutex<Config>>>,
     http_client: web::Data<Client>,
 ) -> impl Responder {
-    // Clone the config to avoid holding the MutexGuard across await
     let mut config_clone = {
         let guard = config.lock().unwrap();
         guard.clone()
@@ -117,7 +103,6 @@ pub async fn check_jobs_endpoint(
 
     match fetch_print_jobs(&http_client, &mut config_clone).await {
         Ok(jobs) => {
-            // Save any changes to the token back to the shared config
             if let Ok(mut guard) = config.lock() {
                 guard.flux_api_token = config_clone.flux_api_token;
             }
@@ -137,7 +122,6 @@ pub async fn check_printers_endpoint(
 ) -> impl Responder {
     match check_for_new_printers(printers_data, http_client, config, **verbose_debug).await {
         Ok(_new_printers) => {
-            // Return the updated list of printers
             let saved_printers = load_printers();
             let printers: Vec<_> = saved_printers.values().cloned().collect();
             HttpResponse::Ok().json(PrinterList { printers })

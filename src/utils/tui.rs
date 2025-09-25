@@ -5,7 +5,7 @@ use cursive::view::Margins;
 use cursive::views::{Checkbox, Dialog, EditView, LinearLayout, PaddedView, TextView};
 use std::sync::{Arc, Mutex};
 
-use crate::config::{load_config, save_config};
+use crate::utils::config::{load_config, save_config};
 use crate::models::Config;
 
 /// Start the TUI editor for application settings

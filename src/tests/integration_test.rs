@@ -37,7 +37,7 @@ async fn test_api_server_integration() {
 // This test verifies the config loading logic
 #[tokio::test]
 async fn test_config_integration() {
-    use crate::config::load_config;
+    use crate::utils::config::load_config;
 
     // Just load the config without modifying it
     let config = load_config();

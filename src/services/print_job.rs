@@ -11,7 +11,6 @@ use crate::models::{Config, PrintJob, PrintJobResponse, WebsocketPrintJob};
 use crate::utils::http::with_auth_header;
 
 /// Process a print job received through WebSocket
-// Update handle_print_job to use the new format when needed
 pub async fn handle_print_job(
     print_job: WebsocketPrintJob,
     http_client: &Client,
@@ -22,7 +21,6 @@ pub async fn handle_print_job(
         print_job.printer_name, print_job.spooler_name, print_job.media_id
     );
 
-    // Check if this job is for this instance
     if print_job.spooler_name != config.instance_name {
         println!(
             "Ignoring job for different printer server: {} (we are: {})",
@@ -31,15 +29,13 @@ pub async fn handle_print_job(
         return Ok(());
     }
 
-    // Construct the URL to get the file
     let file_url = format!(
         "{}/api/media/private/{}",
         config.flux_url, print_job.media_id
     );
 
-    // Download the file
     let file_response = with_auth_header(http_client.get(&file_url), config)
-        .header("Accept", "application/octet-stream") // Add this to request binary data
+        .header("Accept", "application/octet-stream")
         .send()
         .await?;
 
@@ -54,12 +50,9 @@ pub async fn handle_print_job(
 
     let file_content = file_response.bytes().await?;
 
-    // Create a temporary file
     let mut temp_file = NamedTempFile::new()?;
     temp_file.write_all(&file_content)?;
     let temp_path = temp_file.path().to_str().unwrap();
-
-    // Print the file using printers crate
     match get_printer_by_name(&print_job.printer_name) {
         Some(printer) => {
             let job_options = PrinterJobOptions {
@@ -74,7 +67,6 @@ pub async fn handle_print_job(
                         print_job.media_id, print_job.printer_name, job_id
                     );
 
-                    // Update print job status to is_printed = true
                     if let Some(job_id) = print_job.job_id {
                         match update_print_job_status(job_id, true, http_client, config).await {
                             Ok(_) => println!("Updated print job {} status to completed", job_id),
@@ -140,13 +132,10 @@ pub async fn fetch_print_jobs(
     http_client: &Client,
     config: &mut Config,
 ) -> Result<Vec<PrintJob>, Box<dyn std::error::Error>> {
-    // Construct the URL for fetching print jobs
     let jobs_url = format!(
         "{}/api/print-jobs?filter[printer.spooler_name]={}&filter[is_completed]=false",
         config.flux_url, config.instance_name
     );
-
-    //println!("Fetching print jobs from URL: {}", jobs_url);
 
     let response = with_auth_header(http_client.get(&jobs_url), config)
         .header("Accept", "application/json")
@@ -228,19 +217,15 @@ pub async fn fetch_print_jobs(
     if !jobs.is_empty() {
         println!("Processing {} print job(s)", jobs.len());
 
-        // Process each job
         for job in &jobs {
             println!(
                 "Processing print job {} for printer ID {:?}",
                 job.id, job.printer_id
             );
 
-            // Get printer name based on printer_id (which may be None)
             let printer_name = get_printer_name_by_id(job.printer_id).await;
 
             let file_url = format!("{}/api/media/private/{}", config.flux_url, job.media_id);
-
-            // Download the file
             let file_response = with_auth_header(http_client.get(&file_url), config)
                 .header("Accept", "application/octet-stream")
                 .send()
@@ -257,12 +242,9 @@ pub async fn fetch_print_jobs(
 
             let file_content = file_response.bytes().await?;
 
-            // Create a temporary file
             let mut temp_file = NamedTempFile::new()?;
             temp_file.write_all(&file_content)?;
             let temp_path = temp_file.path().to_str().unwrap();
-
-            // Print the file using printers crate
             match get_printer_by_name(&printer_name) {
                 Some(printer) => {
                     let job_options = PrinterJobOptions {
@@ -277,7 +259,6 @@ pub async fn fetch_print_jobs(
                                 job.id, print_job_id
                             );
 
-                            // Update job status to is_printed = true
                             match update_print_job_status(job.id, true, http_client, config).await {
                                 Ok(_) => {
                                     println!("Updated print job {} status to completed", job.id)
@@ -301,19 +282,13 @@ pub async fn fetch_print_jobs(
     Ok(jobs)
 }
 
-/// Helper function to get printer name by ID
 async fn get_printer_name_by_id(printer_id: Option<u32>) -> String {
-    // If printer_id is None, use a default printer
     if printer_id.is_none() {
         return get_default_printer_name().await;
     }
 
     let printer_id = printer_id.unwrap();
-
-    // Look up the printer name from the saved printers
     let saved_printers = crate::utils::printer_storage::load_printers();
-
-    // Find the printer with the matching ID
     for (name, printer) in saved_printers {
         if let Some(id) = printer.printer_id {
             if id == printer_id {
@@ -322,7 +297,6 @@ async fn get_printer_name_by_id(printer_id: Option<u32>) -> String {
         }
     }
 
-    // Fallback if no printer with that ID is found
     get_default_printer_name().await
 }
 
@@ -339,7 +313,6 @@ pub async fn job_checker_task(config: Arc<Mutex<Config>>, http_client: Client) {
             return;
         }
 
-        // Get interval and create a mutable config clone
         let interval;
         let mut config_clone;
 
@@ -355,7 +328,6 @@ pub async fn job_checker_task(config: Arc<Mutex<Config>>, http_client: Client) {
                     println!("Processed {} print job(s)", jobs.len());
                 }
 
-                // Save any token changes back to the shared config
                 if let Ok(mut guard) = config.lock() {
                     guard.flux_api_token = config_clone.flux_api_token;
                 }
@@ -368,12 +340,10 @@ pub async fn job_checker_task(config: Arc<Mutex<Config>>, http_client: Client) {
 }
 
 async fn get_default_printer_name() -> String {
-    // Fallback to first available printer using printers crate
     let system_printers = get_printers();
     if !system_printers.is_empty() {
         return system_printers[0].name.clone();
     }
 
-    // Last resort
     "default".to_string()
 }

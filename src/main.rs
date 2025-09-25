@@ -10,14 +10,13 @@ use reqwest::Client;
 use tracing_subscriber::EnvFilter;
 
 mod api;
-mod config;
 mod models;
 mod services;
 mod tests;
 mod utils;
 
 use api::routes::{check_jobs_endpoint, check_printers_endpoint, get_printers, print_file};
-use config::load_config;
+use utils::config::load_config;
 use services::print_job::job_checker_task;
 use services::printer::{get_all_printers, printer_checker_task};
 use services::websocket::websocket_task;
@@ -47,10 +46,7 @@ enum Commands {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // Parse command line arguments
     let cli = Cli::parse();
-
-    // Configure logging based on verbosity level
     let env_filter = match cli.verbose {
         0 => EnvFilter::from_default_env()
             .add_directive("reverb_rs=warn".parse().unwrap())
@@ -66,20 +62,14 @@ async fn main() -> std::io::Result<()> {
             .add_directive("rust_spooler=trace".parse().unwrap()),
     };
 
-    // Initialize the tracing subscriber with the configured filter
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
-    // Handle subcommands
     match cli.command {
         Some(Commands::Config) => {
-            // Run the TUI configuration editor
             run_tui();
             return Ok(());
         }
-        _ => {
-            // Default: run the server
-            run_server(cli.verbose >= 3).await
-        }
+        _ => run_server(cli.verbose >= 3).await,
     }
 }
 

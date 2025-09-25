@@ -13,21 +13,14 @@ pub async fn sync_printers_with_api(
     config: &Config,
     verbose_debug: bool,
 ) -> Result<HashMap<String, Printer>, Box<dyn std::error::Error>> {
-    // 1. We already have local printers from CUPS
-    // 2. We already loaded saved_printers from printer.json
+    let mut updated_printers = local_printers.clone();
 
-    let mut updated_printers = local_printers.clone(); // Start with local printers
-
-    // First, get the existing printers from the API
     let api_printers = fetch_printers_from_api(http_client, config, verbose_debug).await?;
-
-    // Create a map of API printers by name
     let mut api_printer_map = HashMap::new();
     for api_printer in api_printers {
         api_printer_map.insert(api_printer.name.clone(), api_printer);
     }
 
-    // Update local printers with IDs from API printers (preserve IDs)
     for (name, printer) in &mut updated_printers {
         if let Some(api_printer) = api_printer_map.get(name) {
             printer.printer_id = api_printer.id;
@@ -39,12 +32,10 @@ pub async fn sync_printers_with_api(
                 );
             }
         } else if let Some(saved_printer) = saved_printers.get(name) {
-            // If not in API but in saved, preserve existing ID
             printer.printer_id = saved_printer.printer_id;
         }
     }
 
-    // 3. Create new printers that don't have IDs yet
     for (name, printer) in updated_printers.iter_mut() {
         if printer.printer_id.is_none() {
             if verbose_debug {

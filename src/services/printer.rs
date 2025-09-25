@@ -25,7 +25,6 @@ pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
             println!("Processing printer: {}", system_printer.name);
         }
 
-        // Get detailed printer info if available
         let detailed_info = get_printer_by_name(&system_printer.name);
 
         let printer = Printer {
@@ -63,18 +62,12 @@ pub async fn check_for_new_printers(
     config: web::Data<Arc<Mutex<Config>>>,
     verbose_debug: bool,
 ) -> Result<Vec<Printer>, Box<dyn std::error::Error>> {
-    // 1. Get current printers from CUPS
     let current_printers = get_all_printers(verbose_debug).await;
-
-    // 2. Load saved printers from printer.json
     let saved_printers = load_printers();
-
-    // Convert current printers list to hashmap with proper IDs from saved_printers
     let mut current_printers_map: HashMap<String, Printer> = HashMap::new();
     for printer in current_printers {
         let mut updated_printer = printer.clone();
 
-        // If printer exists in saved_printers, preserve its printer_id
         if let Some(saved_printer) = saved_printers.get(&printer.name) {
             updated_printer.printer_id = saved_printer.printer_id;
         }
@@ -82,13 +75,10 @@ pub async fn check_for_new_printers(
         current_printers_map.insert(printer.name.clone(), updated_printer);
     }
 
-    // Get the required configuration
     let config_clone = {
         let guard = config.lock().unwrap();
         guard.clone()
     };
-
-    // 3-6. Sync with API following the specified order of operations
     let sync_result = sync_printers_with_api(
         &current_printers_map,
         &saved_printers,
@@ -102,12 +92,9 @@ pub async fn check_for_new_printers(
         Ok(printers) => printers,
         Err(e) => {
             eprintln!("Error syncing printers with API: {}", e);
-            // If sync fails, just use current printers with saved IDs
             current_printers_map
         }
     };
-
-    // Save the updated printers only if they have changed
     let printers_were_updated = save_printers_if_changed(&updated_printers, &saved_printers);
     if printers_were_updated {
         println!(
@@ -116,7 +103,6 @@ pub async fn check_for_new_printers(
         );
     }
 
-    // Update the printers_data set with current printer names
     {
         let mut printers_set = printers_data.lock().unwrap();
         printers_set.clear();
@@ -124,8 +110,6 @@ pub async fn check_for_new_printers(
             printers_set.insert(printer.clone());
         }
     }
-
-    // Return new printers (those not in the old saved_printers)
     let new_printers: Vec<Printer> = updated_printers
         .values()
         .filter(|p| !saved_printers.contains_key(&p.name))
@@ -146,7 +130,6 @@ pub async fn printer_checker_task(
     let config_data = web::Data::new(config);
     let client_data = web::Data::new(http_client);
 
-    // Initial check at startup
     match check_for_new_printers(
         printers_data.clone(),
         client_data.clone(),
@@ -166,11 +149,9 @@ pub async fn printer_checker_task(
         Err(e) => eprintln!("Error checking for new printers at startup: {}", e),
     }
 
-    // 7. Continue checking at the configured interval
     loop {
         let interval = { config_data.lock().unwrap().printer_check_interval };
 
-        // Sleep first before checking again
         time::sleep(Duration::from_secs(interval * 60)).await;
 
         match check_for_new_printers(

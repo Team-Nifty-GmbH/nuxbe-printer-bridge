@@ -80,7 +80,7 @@ pub mod api_tests {
 
 #[cfg(test)]
 pub mod config_tests {
-    use crate::config::load_config;
+    use crate::utils::config::load_config;
 
     #[test]
     fn test_config_exists() {

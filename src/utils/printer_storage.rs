@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 /// Path to the printers JSON file
 pub fn printers_file_path() -> PathBuf {
-    let config_dir = crate::config::config_dir();
+    let config_dir = crate::utils::config::config_dir();
     config_dir.join("printers.json")
 }
 
@@ -78,7 +78,7 @@ pub fn save_printers(printers: &HashMap<String, Printer>) {
     let path = printers_file_path();
 
     // Ensure the config directory exists
-    let config_dir = crate::config::config_dir();
+    let config_dir = crate::utils::config::config_dir();
     if !config_dir.exists() {
         fs::create_dir_all(&config_dir).expect("Failed to create config directory");
     }

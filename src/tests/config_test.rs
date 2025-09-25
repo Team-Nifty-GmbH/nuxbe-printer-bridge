@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
-use crate::config::load_config;
+use crate::utils::config::load_config;
 
 // Helper to create a test config directory
 fn setup_test_config_dir() -> (tempfile::TempDir, PathBuf) {
