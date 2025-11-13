@@ -7,6 +7,7 @@ use actix_web::{App, HttpServer, web};
 use clap::{ArgAction, Parser, Subcommand};
 use local_ip_address::local_ip;
 use reqwest::Client;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 mod api;
@@ -112,9 +113,9 @@ async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
         let printers_were_updated =
             save_printers_if_changed(&updated_printers, &original_saved_printers);
         if printers_were_updated {
-            println!(
-                "Initial printer configuration updated - saved {} printers",
-                updated_printers.len()
+            info!(
+                printers_count = updated_printers.len(),
+                "Initial printer configuration updated"
             );
         }
     }
@@ -155,9 +156,10 @@ async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
 
     let local_address = local_ip().unwrap_or_else(|_| IpAddr::from_str("127.0.0.1").unwrap());
 
-    println!(
-        "Starting CUPS print server API on http://{}:{}",
-        local_address, api_port
+    info!(
+        address = %local_address,
+        port = api_port,
+        "Starting CUPS print server API"
     );
 
     // API Server

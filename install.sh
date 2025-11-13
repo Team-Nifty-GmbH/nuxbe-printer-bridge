@@ -25,11 +25,16 @@ sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y
 
 # Install the required packages
 echo -e "${GREEN}Installing CUPS, CUPS-Tools, OpenSSH, Git, MC, and Nano...${NC}"
-sudo apt install -y cups cups-client cups-bsd git mc nano libssl-dev pkg-config tmux
+sudo apt install -y cups cups-client cups-bsd openssh-server git mc nano libssl-dev pkg-config tmux build-essential hplip printer-driver-all
 
-# Enable and start services1
+# Enable and start services
 echo -e "${GREEN}Enabling and starting services...${NC}"
 sudo systemctl enable --now cups
+sudo systemctl enable --now ssh
+
+# Add current user to CUPS admin group
+echo -e "${GREEN}Adding user to CUPS admin group...${NC}"
+sudo usermod -a -G lpadmin $USER
 
 # Optional: Install Tailscale
 read -p "Would you like to install Tailscale? (y/n): " install_tailscale
@@ -61,7 +66,7 @@ fi
 read -p "Would you like to install Rust? (y/n): " install_rust
 if [[ $install_rust == "y" || $install_rust == "Y" ]]; then
     echo -e "${GREEN}Installing Rust...${NC}"
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
     # Add Rust to the current shell session
     source $HOME/.cargo/env
@@ -70,8 +75,14 @@ if [[ $install_rust == "y" || $install_rust == "Y" ]]; then
 
     # Verify Rust installation
     echo -e "${YELLOW}Verifying Rust installation:${NC}"
-    rustc --version
-    cargo --version
+    if command -v rustc &> /dev/null; then
+        rustc --version
+        cargo --version
+        echo -e "${GREEN}✓${NC} Rust installation verified"
+    else
+        echo -e "${YELLOW}⚠${NC} Rust installation may require a shell restart"
+        echo -e "${YELLOW}Run 'source ~/.cargo/env' or restart your shell${NC}"
+    fi
 fi
 
 # Display summary

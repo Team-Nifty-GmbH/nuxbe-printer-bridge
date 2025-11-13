@@ -6,6 +6,7 @@ use actix_web::web;
 use printers::{get_printer_by_name, get_printers};
 use reqwest::Client;
 use tokio::time;
+use tracing::{debug, error, info, trace};
 
 use crate::models::{Config, Printer};
 use crate::services::printer_sync::sync_printers_with_api;
@@ -17,12 +18,12 @@ pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
     let mut printers = Vec::new();
 
     if verbose_debug {
-        println!("Found {} system printer(s)", system_printers.len());
+        debug!(count = system_printers.len(), "Found system printers");
     }
 
     for system_printer in system_printers {
         if verbose_debug {
-            println!("Processing printer: {}", system_printer.name);
+            trace!(printer = %system_printer.name, "Processing printer");
         }
 
         let detailed_info = get_printer_by_name(&system_printer.name);
@@ -49,7 +50,7 @@ pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
     }
 
     if verbose_debug {
-        println!("Successfully processed {} printer(s)", printers.len());
+        debug!(count = printers.len(), "Successfully processed printers");
     }
 
     printers
@@ -91,15 +92,15 @@ pub async fn check_for_new_printers(
     let updated_printers = match sync_result {
         Ok(printers) => printers,
         Err(e) => {
-            eprintln!("Error syncing printers with API: {}", e);
+            error!(error = %e, "Error syncing printers with API");
             current_printers_map
         }
     };
     let printers_were_updated = save_printers_if_changed(&updated_printers, &saved_printers);
     if printers_were_updated {
-        println!(
-            "Printer configuration updated - saved {} printers",
-            updated_printers.len()
+        info!(
+            count = updated_printers.len(),
+            "Printer configuration updated"
         );
     }
 
@@ -140,13 +141,13 @@ pub async fn printer_checker_task(
     {
         Ok(new_printers) => {
             if !new_printers.is_empty() {
-                println!("Found {} new printer(s) at startup", new_printers.len());
-                for printer in new_printers {
-                    println!("  - {}", printer.name);
+                info!(count = new_printers.len(), "Found new printers at startup");
+                for printer in &new_printers {
+                    info!(printer = %printer.name, "New printer discovered");
                 }
             }
         }
-        Err(e) => eprintln!("Error checking for new printers at startup: {}", e),
+        Err(e) => error!(error = %e, "Error checking for new printers at startup"),
     }
 
     loop {
@@ -164,13 +165,13 @@ pub async fn printer_checker_task(
         {
             Ok(new_printers) => {
                 if !new_printers.is_empty() {
-                    println!("Found {} new printer(s)", new_printers.len());
-                    for printer in new_printers {
-                        println!("  - {}", printer.name);
+                    info!(count = new_printers.len(), "Found new printers");
+                    for printer in &new_printers {
+                        info!(printer = %printer.name, "New printer discovered");
                     }
                 }
             }
-            Err(e) => eprintln!("Error checking for new printers: {}", e),
+            Err(e) => error!(error = %e, "Error checking for new printers"),
         }
     }
 }

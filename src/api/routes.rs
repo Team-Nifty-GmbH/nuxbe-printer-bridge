@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use actix_multipart::Multipart;
 use actix_web::{Error, HttpResponse, Responder, get, post, web};
+use cursive::reexports::log::{debug, trace};
 use futures::{StreamExt, TryStreamExt};
 use printers::common::base::job::PrinterJobOptions;
 use printers::get_printer_by_name;
@@ -38,12 +39,12 @@ pub async fn print_file(
     let printer_name = &query.printer;
 
     while let Ok(Some(mut field)) = payload.try_next().await {
-        if let Some(content_disposition) = field.content_disposition() {
-            if let Some(filename) = content_disposition.get_filename() {
+        if let Some(content_disposition) = field.content_disposition()
+            && let Some(filename) = content_disposition.get_filename() {
                 let filename_str = filename.to_string();
 
                 if **verbose_debug {
-                    println!("Processing file upload: {}", filename_str);
+                    trace!("Processing file upload: {}", filename_str);
                 }
 
                 let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
@@ -56,7 +57,7 @@ pub async fn print_file(
                 let temp_path = temp_file.path().to_str().unwrap();
 
                 if **verbose_debug {
-                    println!("Printing file from temp path: {}", temp_path);
+                    debug!("Printing file: {} to printer: {}", temp_path, printer_name);
                 }
                 match get_printer_by_name(printer_name) {
                     Some(printer) => {
@@ -84,7 +85,6 @@ pub async fn print_file(
                     }
                 }
             }
-        }
     }
 
     Ok(HttpResponse::BadRequest().body("No file provided"))

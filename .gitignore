@@ -2,3 +2,5 @@
 .idea
 /http-client.private.env.json
 rust-mcp-*
+tmp
+CLAUDE.md

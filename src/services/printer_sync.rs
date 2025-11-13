@@ -1,5 +1,6 @@
 use reqwest::{Client, StatusCode};
 use std::collections::{HashMap, HashSet};
+use tracing::{debug, error, trace};
 
 use crate::models::api::{ApiPrinter, ApiPrinterResponse};
 use crate::models::{Config, Printer};
@@ -25,10 +26,10 @@ pub async fn sync_printers_with_api(
         if let Some(api_printer) = api_printer_map.get(name) {
             printer.printer_id = api_printer.id;
             if verbose_debug {
-                println!(
-                    "Found existing printer in API: {} with ID {}",
-                    name,
-                    api_printer.id.unwrap_or(0)
+                trace!(
+                    printer = %name,
+                    id = api_printer.id.unwrap_or(0),
+                    "Found existing printer in API"
                 );
             }
         } else if let Some(saved_printer) = saved_printers.get(name) {
@@ -39,21 +40,21 @@ pub async fn sync_printers_with_api(
     for (name, printer) in updated_printers.iter_mut() {
         if printer.printer_id.is_none() {
             if verbose_debug {
-                println!("Creating new printer in API: {}", name);
+                debug!(printer = %name, "Creating new printer in API");
             }
             match create_printer_in_api(printer, http_client, config, verbose_debug).await {
                 Ok(new_printer) => {
                     if verbose_debug {
-                        println!(
-                            "Created printer {} in API with ID {}",
-                            new_printer.name,
-                            new_printer.printer_id.unwrap_or(0)
+                        debug!(
+                            printer = %new_printer.name,
+                            id = new_printer.printer_id.unwrap_or(0),
+                            "Created printer in API"
                         );
                     }
                     *printer = new_printer.clone();
                 }
                 Err(e) => {
-                    eprintln!("Failed to create printer {} in API: {}", name, e);
+                    error!(printer = %name, error = %e, "Failed to create printer in API");
                 }
             }
         }
@@ -68,24 +69,25 @@ pub async fn sync_printers_with_api(
         .collect();
 
     for name in removed_printers {
-        if let Some(printer) = saved_printers.get(name) {
-            if let Some(id) = printer.printer_id {
+        if let Some(printer) = saved_printers.get(name)
+            && let Some(id) = printer.printer_id {
                 // Delete from API
                 match delete_printer_from_api(id, http_client, config, verbose_debug).await {
                     Ok(_) => {
                         if verbose_debug {
-                            println!("Deleted printer {} (ID: {}) from API", name, id);
+                            debug!(printer = %name, id, "Deleted printer from API");
                         }
                     }
                     Err(e) => {
-                        eprintln!(
-                            "Failed to delete printer {} (ID: {}) from API: {}",
-                            name, id, e
+                        error!(
+                            printer = %name,
+                            id,
+                            error = %e,
+                            "Failed to delete printer from API"
                         );
                     }
                 }
             }
-        }
     }
 
     // 5. Update changed printers
@@ -96,16 +98,16 @@ pub async fn sync_printers_with_api(
                 // Get the updated printer from our map
                 if let Some(printer) = updated_printers.get_mut(name) {
                     if verbose_debug {
-                        println!("Updating printer {} in API", name);
+                        debug!(printer = %name, "Updating printer in API");
                     }
                     match update_printer_in_api(printer, http_client, config, verbose_debug).await {
                         Ok(_) => {
                             if verbose_debug {
-                                println!("Updated printer {} in API", name);
+                                debug!(printer = %name, "Updated printer in API");
                             }
                         }
                         Err(e) => {
-                            eprintln!("Failed to update printer {} in API: {}", name, e);
+                            error!(printer = %name, error = %e, "Failed to update printer in API");
                         }
                     }
                 }
@@ -138,7 +140,7 @@ async fn fetch_printers_from_api(
 
     let response_text = response.text().await?;
     if verbose_debug {
-        println!("API response: {}", response_text);
+        trace!(response = %response_text, "API response");
     }
 
     let parsed_response: ApiPrinterResponse = serde_json::from_str(&response_text)?;
@@ -171,7 +173,7 @@ async fn create_printer_in_api(
 
     let response_text = response.text().await?;
     if verbose_debug {
-        println!("API create response: {}", response_text);
+        trace!(response = %response_text, "API create response");
     }
 
     let response_data: serde_json::Value = serde_json::from_str(&response_text)?;
@@ -219,7 +221,7 @@ async fn update_printer_in_api(
 
     if verbose_debug {
         let response_text = response.text().await?;
-        println!("API update response: {}", response_text);
+        trace!(response = %response_text, "API update response");
     }
 
     // Return the updated printer
@@ -249,7 +251,7 @@ async fn delete_printer_from_api(
     }
 
     if verbose_debug {
-        println!("Successfully deleted printer with ID: {}", printer_id);
+        debug!(id = printer_id, "Successfully deleted printer");
     }
 
     Ok(())

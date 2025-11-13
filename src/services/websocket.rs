@@ -8,6 +8,7 @@ use serde_json;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio;
+use tracing::{debug, error, info};
 
 pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
     let disabled = {
@@ -16,7 +17,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
     };
 
     if disabled {
-        println!("WebSocket functionality is disabled. Not connecting to Reverb.");
+        info!("WebSocket functionality is disabled. Not connecting to Reverb");
         return;
     }
 
@@ -36,7 +37,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
             host = config_guard.reverb_host.clone();
         }
 
-        println!("Initializing Reverb client with app key: {}", app_key);
+        info!(app_key = %app_key, "Initializing Reverb client");
 
         // Create the client directly
         let reverb_client = ReverbClient::new(
@@ -57,7 +58,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
         #[async_trait]
         impl EventHandler for PrintJobHandler {
             async fn on_connection_established(&self, socket_id: &str) {
-                println!("Connection established with socket id: {}", socket_id);
+                info!(socket_id, "Connection established");
 
                 // Now that we have a socket_id, subscribe to the channel
                 let channel_name = "FluxErp.Models.PrintJobs";
@@ -65,25 +66,27 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
 
                 // Use the client directly - no mutex lock needed
                 match self.client.subscribe(channel).await {
-                    Ok(_) => println!("Subscribed to channel: private-{}", channel_name),
+                    Ok(_) => info!(channel = %channel_name, "Subscribed to channel"),
                     Err(e) => {
-                        eprintln!("Failed to subscribe to channel: {:?}", e);
+                        error!(channel = %channel_name, error = ?e, "Failed to subscribe to channel");
                     }
                 }
             }
 
             async fn on_channel_subscription_succeeded(&self, channel: &str) {
-                println!("Successfully subscribed to channel: {}", channel);
+                info!(channel, "Successfully subscribed to channel");
             }
 
             async fn on_channel_event(&self, channel: &str, event: &str, data: &str) {
-                println!(
-                    "Received event: {} on channel: {} with data: {}",
-                    event, channel, data
+                debug!(
+                    event,
+                    channel,
+                    data_len = data.len(),
+                    "Received channel event"
                 );
 
                 if event == "PrintJobCreated" {
-                    println!("Received print job event on channel {}: {}", channel, data);
+                    info!(channel, "Received print job event");
 
                     // Parse the print job data
                     match serde_json::from_str::<WebsocketPrintJob>(data) {
@@ -104,9 +107,9 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
                                     handle_print_job(print_job, &client_clone, &mut config_copy)
                                         .await
                                 {
-                                    eprintln!("Error handling print job: {}", e);
+                                    error!(error = %e, "Error handling print job");
                                 } else {
-                                    println!("Successfully handled print job from WebSocket");
+                                    info!("Successfully handled print job from WebSocket");
                                 }
 
                                 // Update the shared config with any token changes
@@ -116,15 +119,14 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
                             });
                         }
                         Err(e) => {
-                            eprintln!("Failed to parse print job data: {}", e);
-                            println!("Raw data: {}", data);
+                            error!(error = %e, raw_data = %data, "Failed to parse print job data");
                         }
                     }
                 }
             }
 
             async fn on_error(&self, code: u32, message: &str) {
-                eprintln!("Reverb error: {} (code: {})", message, code);
+                error!(code, message, "Reverb error");
             }
         }
 
@@ -144,17 +146,17 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
         // Connect to the server
         match client_arc.connect().await {
             Ok(_) => {
-                println!("Connected to Reverb successfully");
+                info!("Connected to Reverb successfully");
                 // Wait for a long time to keep the connection alive
                 tokio::time::sleep(Duration::from_secs(3600)).await;
             }
             Err(e) => {
-                eprintln!("Failed to connect to Reverb: {:?}", e);
+                error!(error = ?e, "Failed to connect to Reverb");
                 tokio::time::sleep(Duration::from_secs(30)).await;
             }
         }
 
         // If we reach here, we'll try to reconnect
-        println!("Reconnecting to Reverb server...");
+        info!("Reconnecting to Reverb server");
     }
 }
