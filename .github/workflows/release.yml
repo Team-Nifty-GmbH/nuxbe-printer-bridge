@@ -102,17 +102,17 @@ jobs:
           RUST_BACKTRACE=1 cross build --target ${{ matrix.target }} --release --features vendored-openssl -vv
           
           # Check if build succeeded
-          if [ -f "target/${{ matrix.target }}/release/rust-spooler" ]; then
+          if [ -f "target/${{ matrix.target }}/release/nuxbe-printer-bridge" ]; then
             echo "Build successful!"
 
             # Package the binary
             mkdir -p artifacts
             cd target/${{ matrix.target }}/release
-            tar czvf ../../../artifacts/nuxbe-printer-bridge-${{ matrix.target }}.tar.gz rust-spooler
+            tar czvf ../../../artifacts/nuxbe-printer-bridge-${{ matrix.target }}.tar.gz nuxbe-printer-bridge
             cd -
           else
             echo "Build failed!"
-            find target -type f -name "rust-spooler" || true
+            find target -type f -name "nuxbe-printer-bridge" || true
             exit 1
           fi
 

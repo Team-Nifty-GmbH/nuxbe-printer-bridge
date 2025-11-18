@@ -90,10 +90,6 @@ jobs:
       - name: Extract binary artifacts
         run: |
           tar -xzf nuxbe-printer-bridge-${{ matrix.target }}.tar.gz -C mypackage/usr/bin/
-          # Rename the binary if needed (release.yml creates rust-spooler)
-          if [ -f mypackage/usr/bin/rust-spooler ]; then
-            mv mypackage/usr/bin/rust-spooler mypackage/usr/bin/nuxbe-printer-bridge
-          fi
           chmod +x mypackage/usr/bin/nuxbe-printer-bridge
 
       - name: Create systemd service file
