@@ -16,12 +16,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
-            cross_image: ghcr.io/cross-rs/x86_64-unknown-linux-musl:main
-            deb_arch: amd64
-          - target: aarch64-unknown-linux-musl
-            cross_image: ghcr.io/cross-rs/aarch64-unknown-linux-musl:main
-            deb_arch: arm64
+          - target: x86_64-unknown-linux-gnu
+            cross_image: ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main
+          - target: aarch64-unknown-linux-gnu
+            cross_image: ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main
 
     steps:
       - uses: actions/checkout@v4
@@ -43,19 +41,16 @@ jobs:
       - name: Configure cross
         run: |
           cat > Cross.toml << 'EOF'
-          [target.x86_64-unknown-linux-musl]
-          image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:main"
+          [target.x86_64-unknown-linux-gnu]
+          image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main"
           pre-build = [
-            "apt-get update",
-            "apt-get install -y libcups2-dev"
+            "apt-get update && apt-get install -y libcups2-dev"
           ]
 
-          [target.aarch64-unknown-linux-musl]
-          image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl:main"
+          [target.aarch64-unknown-linux-gnu]
+          image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main"
           pre-build = [
-            "dpkg --add-architecture arm64",
-            "apt-get update",
-            "apt-get install -y libcups2-dev:arm64"
+            "dpkg --add-architecture arm64 && apt-get update && apt-get install -y libcups2-dev:arm64"
           ]
 
           [build.env]
@@ -148,6 +143,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/nuxbe-printer-bridge-x86_64-unknown-linux-musl/nuxbe-printer-bridge-x86_64-unknown-linux-musl.tar.gz
-            artifacts/nuxbe-printer-bridge-aarch64-unknown-linux-musl/nuxbe-printer-bridge-aarch64-unknown-linux-musl.tar.gz
+            artifacts/nuxbe-printer-bridge-x86_64-unknown-linux-gnu/nuxbe-printer-bridge-x86_64-unknown-linux-gnu.tar.gz
+            artifacts/nuxbe-printer-bridge-aarch64-unknown-linux-gnu/nuxbe-printer-bridge-aarch64-unknown-linux-gnu.tar.gz
           generate_release_notes: true
