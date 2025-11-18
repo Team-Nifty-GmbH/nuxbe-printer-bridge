@@ -69,14 +69,18 @@ EOF
 
 sudo mv /tmp/release Release
 
-# Sign Release file if GPG key exists
-if [ -f /tmp/gpg-keyid.env ]; then
-    source /tmp/gpg-keyid.env
-    if [ -n "$KEYID" ]; then
-        sudo gpg --armor --detach-sign --sign --default-key $KEYID -o Release.gpg Release
-        sudo gpg --clearsign --default-key $KEYID -o InRelease Release
-        echo "Release files signed"
-    fi
+# Sign Release file with GPG
+# The GPG key should be in root's keyring (since we run with sudo)
+KEYID=$(sudo gpg --list-secret-keys --keyid-format LONG 2>/dev/null | grep -A 1 "sec" | grep -oP "rsa4096/\K[A-F0-9]+" | head -1)
+
+if [ -n "$KEYID" ]; then
+    sudo gpg --batch --yes --armor --detach-sign --default-key $KEYID -o Release.gpg Release
+    sudo gpg --batch --yes --clearsign --default-key $KEYID -o InRelease Release
+    echo "Release files signed with key $KEYID"
+else
+    echo "ERROR: No GPG key found! Repository will not be usable."
+    echo "Run generate-gpg-key.sh as root to create the signing key."
+    exit 1
 fi
 
 # Set permissions
