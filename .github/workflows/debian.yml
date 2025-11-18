@@ -23,10 +23,8 @@ jobs:
         include:
           - arch: amd64
             target: x86_64-unknown-linux-musl
-            lib_dir: x86_64-linux-gnu
           - arch: arm64
             target: aarch64-unknown-linux-musl
-            lib_dir: aarch64-linux-gnu
 
     steps:
       - name: Check out code

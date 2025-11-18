@@ -17,9 +17,11 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
-            cross_image: ghcr.io/cross-rs/x86_64-unknown-linux-musl:0.2.4
+            cross_image: ghcr.io/cross-rs/x86_64-unknown-linux-musl:main
+            deb_arch: amd64
           - target: aarch64-unknown-linux-musl
-            cross_image: ghcr.io/cross-rs/aarch64-unknown-linux-musl:0.2.4
+            cross_image: ghcr.io/cross-rs/aarch64-unknown-linux-musl:main
+            deb_arch: arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -37,16 +39,25 @@ jobs:
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
-      # Create Cross.toml config
+      # Create Cross.toml config with CUPS installation
       - name: Configure cross
         run: |
-          cat > Cross.toml << EOF
-          [target.${{ matrix.target }}]
-          image = "${{ matrix.cross_image }}"
-          EOF
+          cat > Cross.toml << 'EOF'
+          [target.x86_64-unknown-linux-musl]
+          image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:main"
+          pre-build = [
+            "apt-get update",
+            "apt-get install -y libcups2-dev"
+          ]
 
-          # Add a passthrough for OpenSSL env variables
-          cat >> Cross.toml << EOF
+          [target.aarch64-unknown-linux-musl]
+          image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl:main"
+          pre-build = [
+            "dpkg --add-architecture arm64",
+            "apt-get update",
+            "apt-get install -y libcups2-dev:arm64"
+          ]
+
           [build.env]
           passthrough = [
             "OPENSSL_DIR",
