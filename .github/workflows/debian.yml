@@ -3,6 +3,10 @@ name: Build Debian Package
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       tag_name:
@@ -32,6 +36,8 @@ jobs:
 
       - name: Set up release variables
         id: vars
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             if [ -z "${{ github.event.inputs.tag_name }}" ]; then
@@ -40,8 +46,11 @@ jobs:
             else
               RELEASE_TAG="${{ github.event.inputs.tag_name }}"
             fi
+          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "Triggered by Release workflow completion, finding latest release..."
+            RELEASE_TAG=$(gh api repos/${{ github.repository }}/releases/latest | jq -r '.tag_name')
           else
-            RELEASE_TAG=${GITHUB_REF#refs/tags/}
+            RELEASE_TAG=${{ github.event.release.tag_name }}
           fi
 
           VERSION=${RELEASE_TAG#v}
