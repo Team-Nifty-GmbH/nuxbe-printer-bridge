@@ -41,7 +41,7 @@ Codename: stable
 Version: 1.0
 Architectures: amd64 armhf arm64
 Components: main
-Description: Debian repository for rust-spooler by Team Nifty GmbH
+Description: Debian repository for nuxbe-printer-bridge by Team Nifty GmbH
 Date: $(date -Ru)
 EOF
 

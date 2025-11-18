@@ -1,6 +1,6 @@
 # Debian Repository Setup
 
-This directory contains everything needed to build and host a Debian repository for rust-spooler on a VPS.
+This directory contains everything needed to build and host a Debian repository for nuxbe-printer-bridge on a VPS.
 
 ## Quick Start
 
@@ -59,11 +59,11 @@ Users can install from your repository:
 curl -fsSL https://apt.team-nifty.com/repository-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/team-nifty.gpg
 
 # Add repository
-echo "deb [signed-by=/usr/share/keyrings/team-nifty.gpg] https://apt.team-nifty.com/ stable main" | sudo tee /etc/apt/sources.list.d/rust-spooler.list
+echo "deb [signed-by=/usr/share/keyrings/team-nifty.gpg] https://apt.team-nifty.com/ stable main" | sudo tee /etc/apt/sources.list.d/nuxbe-printer-bridge.list
 
 # Install package
 sudo apt update
-sudo apt install rust-spooler
+sudo apt install nuxbe-printer-bridge
 ```
 
 ## Files Overview

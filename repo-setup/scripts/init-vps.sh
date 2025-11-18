@@ -31,7 +31,7 @@ echo ">>> Creating deploy user..."
 if ! id "deploy" &>/dev/null; then
     useradd -m -s /bin/bash deploy
     usermod -aG sudo deploy
-    echo "deploy ALL=(ALL) NOPASSWD: /opt/rust-spooler/repo-setup/scripts/update-repo.sh" >> /etc/sudoers.d/deploy
+    echo "deploy ALL=(ALL) NOPASSWD: /opt/nuxbe-printer-bridge/repo-setup/scripts/update-repo.sh" >> /etc/sudoers.d/deploy
     chmod 440 /etc/sudoers.d/deploy
 fi
 
@@ -48,13 +48,13 @@ echo "    /home/deploy/.ssh/authorized_keys"
 echo ""
 
 # Clone repository
-echo ">>> Cloning rust-spooler repository..."
-if [ ! -d /opt/rust-spooler ]; then
-    git clone https://github.com/Team-Nifty-GmbH/rust-spooler.git /opt/rust-spooler
+echo ">>> Cloning nuxbe-printer-bridge repository..."
+if [ ! -d /opt/nuxbe-printer-bridge ]; then
+    git clone https://github.com/Team-Nifty-GmbH/nuxbe-printer-bridge.git /opt/nuxbe-printer-bridge
 else
-    cd /opt/rust-spooler && git pull
+    cd /opt/nuxbe-printer-bridge && git pull
 fi
-chown -R root:root /opt/rust-spooler
+chown -R root:root /opt/nuxbe-printer-bridge
 
 # Create repository directory structure
 echo ">>> Creating repository structure..."
@@ -64,7 +64,7 @@ chmod -R 755 /var/www/debian-repo
 
 # Configure nginx
 echo ">>> Configuring nginx..."
-cp /opt/rust-spooler/repo-setup/nginx/debian-repo.conf /etc/nginx/sites-available/
+cp /opt/nuxbe-printer-bridge/repo-setup/nginx/debian-repo.conf /etc/nginx/sites-available/
 ln -sf /etc/nginx/sites-available/debian-repo.conf /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default
 
@@ -77,7 +77,7 @@ systemctl reload nginx
 
 # Generate GPG key for package signing
 echo ">>> Generating GPG key..."
-/opt/rust-spooler/repo-setup/scripts/generate-gpg-key.sh
+/opt/nuxbe-printer-bridge/repo-setup/scripts/generate-gpg-key.sh
 
 # Copy public key to web root
 if [ -f /tmp/repository-key.gpg ]; then

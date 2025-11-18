@@ -1,6 +1,31 @@
 /target
 .idea
-/http-client.private.env.json
-rust-mcp-*
 tmp
 CLAUDE.md
+
+# Sensitive files - NEVER commit these
+/http-client.private.env.json
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+*.pfx
+.credentials
+config.json
+printers.json
+
+# Log files
+*.log
+*.log.*
+rust-mcp-*
+
+# Editor files
+*.swp
+*~
+*.bak
+.DS_Store
+
+# Build artifacts
+artifacts/

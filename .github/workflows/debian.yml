@@ -10,10 +10,23 @@ on:
         required: false
         default: ''
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
 jobs:
   build-deb-package:
-    name: Build Debian Package
+    name: Build Debian Package (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-musl
+            lib_dir: x86_64-linux-gnu
+          - arch: arm64
+            target: aarch64-unknown-linux-musl
+            lib_dir: aarch64-linux-gnu
 
     steps:
       - name: Check out code
@@ -48,88 +61,68 @@ jobs:
           # Create a directory for the assets
           mkdir -p release-assets
 
-          # Download the x86_64 artifact
-          gh release download ${{ env.RELEASE_TAG }} -p "*x86_64*.tar.gz" -D release-assets
-
-          # Download the aarch64 artifact
-          gh release download ${{ env.RELEASE_TAG }} -p "*aarch64*.tar.gz" -D release-assets
+          # Download the artifact for this architecture
+          gh release download ${{ env.RELEASE_TAG }} -p "*${{ matrix.target }}*.tar.gz" -D release-assets
 
           # List the downloaded files
           ls -la release-assets
 
-          # Copy files to working directory with expected names
-          cp release-assets/*x86_64*.tar.gz rust-spooler-x86_64-unknown-linux-musl.tar.gz
-          cp release-assets/*aarch64*.tar.gz rust-spooler-aarch64-unknown-linux-musl.tar.gz
+          # Copy file to working directory
+          cp release-assets/*${{ matrix.target }}*.tar.gz nuxbe-printer-bridge-${{ matrix.target }}.tar.gz
 
       - name: Create package directory structure
         run: |
           mkdir -p mypackage/DEBIAN
-          # Use Debian multiarch conventions instead of putting binaries directly in /usr/bin
-          mkdir -p mypackage/usr/lib/x86_64-linux-gnu/flux-spooler
-          mkdir -p mypackage/usr/lib/aarch64-linux-gnu/flux-spooler
           mkdir -p mypackage/usr/bin
           mkdir -p mypackage/lib/systemd/system
 
       - name: Extract binary artifacts
         run: |
-          tar -xzf rust-spooler-x86_64-unknown-linux-musl.tar.gz -C mypackage/usr/lib/x86_64-linux-gnu/flux-spooler/
-          tar -xzf rust-spooler-aarch64-unknown-linux-musl.tar.gz -C mypackage/usr/lib/aarch64-linux-gnu/flux-spooler/
-          chmod +x mypackage/usr/lib/x86_64-linux-gnu/flux-spooler/rust-spooler
-          chmod +x mypackage/usr/lib/aarch64-linux-gnu/flux-spooler/rust-spooler
-
-      - name: Create wrapper script
-        run: |
-          cat > mypackage/usr/bin/rust-spooler << 'EOF'
-          #!/bin/sh
-          # Architecture detection script for rust-spooler
-          
-          ARCH=$(dpkg --print-architecture)
-          if [ "$ARCH" = "arm64" ]; then
-              exec /usr/lib/aarch64-linux-gnu/flux-spooler/rust-spooler "$@"
-          else
-              exec /usr/lib/x86_64-linux-gnu/flux-spooler/rust-spooler "$@"
+          tar -xzf nuxbe-printer-bridge-${{ matrix.target }}.tar.gz -C mypackage/usr/bin/
+          # Rename the binary if needed (release.yml creates rust-spooler)
+          if [ -f mypackage/usr/bin/rust-spooler ]; then
+            mv mypackage/usr/bin/rust-spooler mypackage/usr/bin/nuxbe-printer-bridge
           fi
-          EOF
-          chmod +x mypackage/usr/bin/rust-spooler
+          chmod +x mypackage/usr/bin/nuxbe-printer-bridge
 
       - name: Create systemd service file
         run: |
-          cat > mypackage/lib/systemd/system/flux-spooler.service << 'EOF'
+          cat > mypackage/lib/systemd/system/nuxbe-printer-bridge.service << 'EOF'
           [Unit]
-          Description=FLUX ERP Print Spooler Service
+          Description=Nuxbe Printer Bridge Service
           After=network.target cups.service
           Requires=cups.service
-          Documentation=https://github.com/Team-Nifty-GmbH/flux-rust-spooler
-          
+          Documentation=https://github.com/Team-Nifty-GmbH/nuxbe-printer-bridge
+
           [Service]
           Type=simple
           User=root
-          ExecStart=/usr/bin/rust-spooler run
+          ExecStart=/usr/bin/nuxbe-printer-bridge run
           Restart=on-failure
           RestartSec=10
           StandardOutput=journal
           StandardError=journal
           Environment="RUST_BACKTRACE=1"
-          
+
           [Install]
           WantedBy=multi-user.target
           EOF
 
       - name: Create Debian control files
         run: |
-          # Create control file with FIXED architecture string (no spaces)
+          # Create control file
           cat > mypackage/DEBIAN/control << EOF
-          Package: flux-cups-spooler
+          Package: nuxbe-printer-bridge
           Version: $VERSION
           Section: utils
           Priority: optional
-          Architecture: all
-          Maintainer: Team Nifty <team@example.com>
-          Depends: cups, cups-client, libssl-dev
-          Description: FLUX ERP to CUPS Print Server
-           A bridge between FLUX ERP and CUPS printing system
+          Architecture: ${{ matrix.arch }}
+          Maintainer: Team Nifty GmbH <packages@team-nifty.com>
+          Depends: cups, cups-client
+          Description: Nuxbe ERP to CUPS Print Server Bridge
+           A bridge between Nuxbe ERP and CUPS printing system
            to manage printers and handle print jobs. It provides
-           a REST API, real-time WebSocket integration, and 
+           a REST API, real-time WebSocket integration, and
            automatic synchronization between systems.
           EOF
 
@@ -139,20 +132,20 @@ jobs:
           set -e
 
           if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ]; then
-              # Make sure the wrapper script is executable
-              chmod +x /usr/bin/rust-spooler
+              # Make sure the binary is executable
+              chmod +x /usr/bin/nuxbe-printer-bridge
 
               # Create config directory if it doesn't exist
-              mkdir -p /etc/flux-spooler
+              mkdir -p /etc/nuxbe-printer-bridge
 
               # Reload systemd to recognize the new service file
               systemctl daemon-reload >/dev/null 2>&1 || true
 
               # Enable service but don't start it
-              echo "Flux print spooler service has been installed but not started."
-              echo "Configure the service with: rust-spooler config"
-              echo "Then start it with: systemctl start flux-spooler.service"
-              echo "To enable at boot: systemctl enable flux-spooler.service"
+              echo "Nuxbe Printer Bridge has been installed but not started."
+              echo "Configure the service with: nuxbe-printer-bridge config"
+              echo "Then start it with: systemctl start nuxbe-printer-bridge.service"
+              echo "To enable at boot: systemctl enable nuxbe-printer-bridge.service"
           fi
 
           exit 0
@@ -166,8 +159,8 @@ jobs:
 
           if [ "$1" = "remove" ]; then
               # Stop the service if it's running
-              systemctl stop flux-spooler.service >/dev/null 2>&1 || true
-              systemctl disable flux-spooler.service >/dev/null 2>&1 || true
+              systemctl stop nuxbe-printer-bridge.service >/dev/null 2>&1 || true
+              systemctl disable nuxbe-printer-bridge.service >/dev/null 2>&1 || true
           fi
 
           exit 0
@@ -175,18 +168,18 @@ jobs:
           chmod 755 mypackage/DEBIAN/prerm
 
           # Create empty config directory and file for conffiles reference
-          mkdir -p mypackage/etc/flux-spooler
-          touch mypackage/etc/flux-spooler/config.json
+          mkdir -p mypackage/etc/nuxbe-printer-bridge
+          touch mypackage/etc/nuxbe-printer-bridge/config.json
 
           # Create conffiles
           cat > mypackage/DEBIAN/conffiles << 'EOF'
-          /etc/flux-spooler/config.json
+          /etc/nuxbe-printer-bridge/config.json
           EOF
 
       - name: Build Debian package
         run: |
           dpkg-deb --build mypackage
-          PKG_NAME="flux-cups-spooler_${VERSION}_multi.deb"
+          PKG_NAME="nuxbe-printer-bridge_${VERSION}_${{ matrix.arch }}.deb"
           mv mypackage.deb "$PKG_NAME"
           echo "PACKAGE_NAME=$PKG_NAME" >> $GITHUB_ENV
 
@@ -198,3 +191,40 @@ jobs:
           asset_name: ${{ env.PACKAGE_NAME }}
           tag: ${{ env.RELEASE_TAG }}
           overwrite: true
+
+  deploy-to-apt-repo:
+    name: Deploy to APT Repository
+    needs: build-deb-package
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Download all .deb packages from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p packages
+          gh release download ${{ github.event.release.tag_name }} -p "*.deb" -D packages -R ${{ github.repository }}
+          ls -la packages/
+
+      - name: Deploy to repository server
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          REPO_HOST: ${{ secrets.REPO_HOST }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ] || [ -z "$REPO_HOST" ]; then
+            echo "DEPLOY_KEY or REPO_HOST not set, skipping deployment"
+            exit 0
+          fi
+
+          # Set up SSH
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$REPO_HOST" >> ~/.ssh/known_hosts
+
+          # Upload packages
+          scp -i ~/.ssh/deploy_key packages/*.deb deploy@$REPO_HOST:/tmp/
+
+          # Update repository
+          ssh -i ~/.ssh/deploy_key deploy@$REPO_HOST 'sudo /opt/nuxbe-printer-bridge/repo-setup/scripts/update-repo.sh'

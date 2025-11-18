@@ -1,12 +1,26 @@
-# FLUX <-> CUPS Print Server
+# Nuxbe Printer Bridge
 
-A Rust application that bridges between FLUX ERP and CUPS (Common UNIX Printing System) to manage printers and handle print jobs. It provides a REST API, real-time WebSocket integration, and automatic synchronization between the systems.
+A Rust application that bridges between Nuxbe ERP and CUPS (Common UNIX Printing System) to manage printers and handle print jobs. It provides a REST API, real-time WebSocket integration, and automatic synchronization between the systems.
+
+## Installation from APT Repository
+
+```bash
+# Add GPG key
+curl -fsSL https://apt.team-nifty.com/repository-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/team-nifty.gpg
+
+# Add repository
+echo "deb [signed-by=/usr/share/keyrings/team-nifty.gpg] https://apt.team-nifty.com/ stable main" | sudo tee /etc/apt/sources.list.d/nuxbe-printer-bridge.list
+
+# Install
+sudo apt update
+sudo apt install nuxbe-printer-bridge
+```
 
 ## Features
 
 - **Printer Management**:
   - Automatic discovery of local CUPS printers
-  - Synchronization of printers with FLUX ERP API
+  - Synchronization of printers with Nuxbe ERP API
   - Real-time printer updates and status tracking
 
 - **Print Job Processing**:
@@ -30,7 +44,7 @@ A Rust application that bridges between FLUX ERP and CUPS (Common UNIX Printing 
 
 - Rust 2024 edition or newer
 - CUPS installed and configured
-- Network connection to FLUX ERP instance
+- Network connection to Nuxbe ERP instance
 - Laravel Reverb for WebSocket functionality (optional)
 
 ## Installation
@@ -59,8 +73,8 @@ brew install cups
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/Team-Nifty-GmbH/flux-rust-spooler
-cd flux-rust-spooler
+git clone https://github.com/Team-Nifty-GmbH/nuxbe-printer-bridge
+cd nuxbe-printer-bridge
 ```
 
 2. Build the application:
@@ -76,13 +90,13 @@ The application can be configured using the built-in configuration tool:
 ./target/release/rust-spooler config
 ```
 
-The configuration is stored in `~/.config/flux-spooler/config.json` and includes:
+The configuration is stored in `~/.config/nuxbe-printer-bridge/config.json` and includes:
 
 - `instance_name`: Unique identifier for this print server
 - `printer_check_interval`: How often to check for printer changes (minutes)
 - `job_check_interval`: How often to check for print jobs (minutes)
-- `flux_url`: Base URL for the FLUX ERP API
-- `flux_api_token`: Authentication token for the API
+- `nuxbe_url`: Base URL for the Nuxbe ERP API
+- `nuxbe_api_token`: Authentication token for the API
 - `api_port`: Port to run the API server on
 - `reverb_disabled`: Whether to disable WebSocket and use polling instead
 - `reverb_*` settings: Configuration for Laravel Reverb WebSocket connection
@@ -94,12 +108,17 @@ The configuration is stored in `~/.config/flux-spooler/config.json` and includes
 Start the application with:
 
 ```bash
-./target/release/rust-spooler run
+./target/release/nuxbe-printer-bridge run
+```
+
+Or if installed via APT:
+```bash
+nuxbe-printer-bridge run
 ```
 
 By default, the application will:
 1. Detect all available CUPS printers
-2. Synchronize printers with the FLUX ERP system
+2. Synchronize printers with the Nuxbe ERP system
 3. Begin listening for print jobs via WebSocket or polling
 4. Start the REST API server on the configured port
 
@@ -130,20 +149,20 @@ For print jobs, the application:
 
 1. Create a systemd service file:
 ```bash
-sudo nano /etc/systemd/system/flux-spooler.service
+sudo nano /etc/systemd/system/nuxbe-printer-bridge.service
 ```
 
 2. Add the following content:
 ```ini
 [Unit]
-Description=FLUX <-> CUPS Print Server
+Description=Nuxbe Printer Bridge
 After=network.target cups.service
 Requires=cups.service
 
 [Service]
 Type=simple
 User=<your-username>
-ExecStart=/path/to/your/rust-spooler run
+ExecStart=/path/to/your/nuxbe-printer-bridge run
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -156,8 +175,8 @@ WantedBy=multi-user.target
 3. Enable and start the service:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable flux-spooler.service
-sudo systemctl start flux-spooler.service
+sudo systemctl enable nuxbe-printer-bridge.service
+sudo systemctl start nuxbe-printer-bridge.service
 ```
 
 ## API Usage Examples
@@ -188,7 +207,7 @@ curl http://localhost:8080/check_jobs
 
 ## Laravel Reverb Integration
 
-The application uses Laravel Reverb for real-time print job notifications. It listens for "PrintJobCreated" events on the "FluxErp.Models.PrintJobs" channel.
+The application uses Laravel Reverb for real-time print job notifications. It listens for "PrintJobCreated" events on the appropriate channel.
 
 The WebSocket connection automatically reconnects if it fails, with a configurable delay between reconnection attempts.
 

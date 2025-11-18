@@ -1,9 +1,9 @@
 #### Variables for easier configuration
-#@baseUrl = http://your-flux-erp.example.com
+#@baseUrl = http://your-nuxbe-erp.example.com
 #@apiToken = your-api-token-here
 #@spoolerName = default-instance
 
-### Get all printers from FLUX ERP
+### Get all printers from Nuxbe ERP
 GET {{baseUrl}}/api/printers
 Accept: application/json
 Authorization: Bearer {{apiToken}}
@@ -13,7 +13,7 @@ GET {{baseUrl}}/api/printers?spooler_name={{spoolerName}}
 Accept: application/json
 Authorization: Bearer {{apiToken}}
 
-### Create a new printer in FLUX ERP
+### Create a new printer in Nuxbe ERP
 POST {{baseUrl}}/api/printers
 Accept: application/json
 Content-Type: application/json

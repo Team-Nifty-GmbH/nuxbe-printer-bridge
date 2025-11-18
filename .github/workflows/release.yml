@@ -98,11 +98,11 @@ jobs:
           # Check if build succeeded
           if [ -f "target/${{ matrix.target }}/release/rust-spooler" ]; then
             echo "Build successful!"
-          
+
             # Package the binary
             mkdir -p artifacts
             cd target/${{ matrix.target }}/release
-            tar czvf ../../../artifacts/rust-spooler-${{ matrix.target }}.tar.gz rust-spooler
+            tar czvf ../../../artifacts/nuxbe-printer-bridge-${{ matrix.target }}.tar.gz rust-spooler
             cd -
           else
             echo "Build failed!"
@@ -114,8 +114,8 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rust-spooler-${{ matrix.target }}
-          path: artifacts/rust-spooler-${{ matrix.target }}.tar.gz
+          name: nuxbe-printer-bridge-${{ matrix.target }}
+          path: artifacts/nuxbe-printer-bridge-${{ matrix.target }}.tar.gz
           retention-days: 1
 
   release:
@@ -137,6 +137,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/rust-spooler-x86_64-unknown-linux-musl/rust-spooler-x86_64-unknown-linux-musl.tar.gz
-            artifacts/rust-spooler-aarch64-unknown-linux-musl/rust-spooler-aarch64-unknown-linux-musl.tar.gz
+            artifacts/nuxbe-printer-bridge-x86_64-unknown-linux-musl/nuxbe-printer-bridge-x86_64-unknown-linux-musl.tar.gz
+            artifacts/nuxbe-printer-bridge-aarch64-unknown-linux-musl/nuxbe-printer-bridge-aarch64-unknown-linux-musl.tar.gz
           generate_release_notes: true

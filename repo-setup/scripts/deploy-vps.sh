@@ -20,14 +20,14 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source ~/.cargo/env
 
 # Clone repository
-echo "📂 Cloning rust-spooler repository..."
+echo "📂 Cloning nuxbe-printer-bridge repository..."
 cd /opt
-sudo git clone https://github.com/Team-Nifty-GmbH/rust-spooler.git
-sudo chown -R $USER:$USER /opt/rust-spooler
+sudo git clone https://github.com/Team-Nifty-GmbH/nuxbe-printer-bridge.git
+sudo chown -R $USER:$USER /opt/nuxbe-printer-bridge
 
 # Build the .deb package
 echo "🔨 Building .deb package..."
-cd /opt/rust-spooler
+cd /opt/nuxbe-printer-bridge
 ./repo-setup/scripts/build-deb.sh
 
 # Set up GPG key for signing
