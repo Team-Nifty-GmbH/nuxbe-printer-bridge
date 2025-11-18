@@ -1,0 +1,22 @@
+Source: rust-spooler
+Section: net
+Priority: optional
+Maintainer: Team Nifty GmbH <packages@team-nifty.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc, libssl-dev, pkg-config, perl
+Standards-Version: 4.6.0
+Homepage: https://github.com/Team-Nifty-GmbH/rust-spooler
+Vcs-Git: https://github.com/Team-Nifty-GmbH/rust-spooler.git
+Vcs-Browser: https://github.com/Team-Nifty-GmbH/rust-spooler
+
+Package: rust-spooler
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, cups, cups-client
+Description: FLUX ERP to CUPS Print Server Bridge
+ A Rust-based print spooler that bridges between FLUX ERP and local CUPS
+ printers. Features include:
+ .
+ - Real-time WebSocket integration with Laravel Reverb
+ - Automatic printer discovery and synchronization
+ - Multi-instance support with configurable filtering
+ - TUI-based configuration interface
+ - Support for both polling and WebSocket modes
