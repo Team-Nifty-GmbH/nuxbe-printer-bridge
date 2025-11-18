@@ -74,6 +74,7 @@ sudo mv /tmp/release Release
 KEYID=$(sudo gpg --list-secret-keys --keyid-format LONG 2>/dev/null | grep -A 1 "sec" | grep -oP "rsa4096/\K[A-F0-9]+" | head -1)
 
 if [ -n "$KEYID" ]; then
+    sudo rm -f Release.gpg InRelease
     sudo gpg --batch --yes --armor --detach-sign --default-key $KEYID -o Release.gpg Release
     sudo gpg --batch --yes --clearsign --default-key $KEYID -o InRelease Release
     echo "Release files signed with key $KEYID"
