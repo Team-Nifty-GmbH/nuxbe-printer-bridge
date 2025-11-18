@@ -20,6 +20,7 @@ reverb-rs = { git = "https://github.com/Team-Nifty-GmbH/reverb_rs", branch = "ma
 async-trait = "0.1.86"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "std"] }
 openssl-sys = { version = "0.9", features = ["vendored"] }
+printers = "2.2.0"
 tracing = "0.1.41"
 
 [features]

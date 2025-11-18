@@ -1751,6 +1751,7 @@ dependencies = [
  "futures",
  "local-ip-address",
  "openssl-sys",
+ "printers",
  "reqwest",
  "reverb-rs",
  "serde",
@@ -1908,6 +1909,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
+]
+
+[[package]]
+name = "printers"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a1f07309b8dd1589167b705fa3b2c5d586e4f690d8044f242d699ff5648cdcc"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
