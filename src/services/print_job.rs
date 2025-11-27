@@ -76,7 +76,9 @@ pub async fn handle_print_job(
                     if let Some(job_id) = print_job.job_id {
                         match update_print_job_status(job_id, true, http_client, config).await {
                             Ok(_) => info!(job_id, "Updated print job status to completed"),
-                            Err(e) => error!(job_id, error = %e, "Failed to update print job status"),
+                            Err(e) => {
+                                error!(job_id, error = %e, "Failed to update print job status")
+                            }
                         }
                     }
 
@@ -138,17 +140,18 @@ pub async fn fetch_print_jobs(
     http_client: &Client,
     config: &mut Config,
 ) -> Result<Vec<PrintJob>, Box<dyn std::error::Error>> {
+    // Include printer relationship to get printer details and filter by is_completed
+    // Note: We fetch all incomplete jobs and filter by printer locally since the printer
+    // might be matched by spooler_name (CUPS printer name)
     let jobs_url = format!(
-        "{}/api/print-jobs?filter[printer.spooler_name]={}&filter[is_completed]=false",
-        config.flux_url, config.instance_name
+        "{}/api/print-jobs?filter[is_completed]=false&include=printer",
+        config.flux_url
     );
+
+    debug!(url = %jobs_url, "Fetching print jobs");
 
     let response = with_auth_header(http_client.get(&jobs_url), config)
         .header("Accept", "application/json")
-        .json(&serde_json::json!({
-            "spooler_name": config.instance_name,
-            "is_completed": false
-        }))
         .send()
         .await?;
 
@@ -187,28 +190,29 @@ pub async fn fetch_print_jobs(
                 debug!(context = %error_context, "Error context");
 
                 // Try to show the part of JSON where error occurred
-                if error_context.contains("line") && error_context.contains("column")
+                if error_context.contains("line")
+                    && error_context.contains("column")
                     && let Ok(err_line) = error_context
                         .split_whitespace()
                         .nth(2)
                         .unwrap_or("0")
                         .parse::<usize>()
-                        && let Ok(err_col) = error_context
-                            .split_whitespace()
-                            .nth(5)
-                            .unwrap_or("0")
-                            .parse::<usize>()
-                        {
-                            let lines: Vec<&str> = response_text.lines().collect();
-                            if err_line <= lines.len() {
-                                let line = lines[err_line - 1];
-                                debug!(line, "Problematic line");
-                                if err_col <= line.len() {
-                                    let marker = " ".repeat(err_col - 1) + "^";
-                                    debug!(position = %marker, "Error position");
-                                }
-                            }
+                    && let Ok(err_col) = error_context
+                        .split_whitespace()
+                        .nth(5)
+                        .unwrap_or("0")
+                        .parse::<usize>()
+                {
+                    let lines: Vec<&str> = response_text.lines().collect();
+                    if err_line <= lines.len() {
+                        let line = lines[err_line - 1];
+                        debug!(line, "Problematic line");
+                        if err_col <= line.len() {
+                            let marker = " ".repeat(err_col - 1) + "^";
+                            debug!(position = %marker, "Error position");
                         }
+                    }
+                }
             }
 
             return Err(format!("Failed to parse API response: {}", e).into());
@@ -221,13 +225,23 @@ pub async fn fetch_print_jobs(
         info!(job_count = jobs.len(), "Processing print jobs");
 
         for job in &jobs {
-            debug!(
-                job_id = job.id,
-                printer_id = ?job.printer_id,
-                "Processing print job"
-            );
-
-            let printer_name = get_printer_name_by_id(job.printer_id).await;
+            // Get the printer's spooler_name (CUPS printer name) from included printer data
+            let printer_name = if let Some(ref printer) = job.printer {
+                debug!(
+                    job_id = job.id,
+                    printer_name = %printer.name,
+                    spooler_name = %printer.spooler_name,
+                    "Processing print job with included printer"
+                );
+                printer.spooler_name.clone()
+            } else {
+                debug!(
+                    job_id = job.id,
+                    printer_id = ?job.printer_id,
+                    "Processing print job (no included printer, looking up by ID)"
+                );
+                get_printer_name_by_id(job.printer_id).await
+            };
 
             let file_url = format!("{}/api/media/private/{}", config.flux_url, job.media_id);
             let file_response = with_auth_header(http_client.get(&file_url), config)
@@ -268,7 +282,9 @@ pub async fn fetch_print_jobs(
                                 Ok(_) => {
                                     info!(job_id = job.id, "Updated print job status to completed")
                                 }
-                                Err(e) => error!(job_id = job.id, error = %e, "Failed to update print job status"),
+                                Err(e) => {
+                                    error!(job_id = job.id, error = %e, "Failed to update print job status")
+                                }
                             }
                         }
                         Err(e) => {
@@ -300,9 +316,10 @@ async fn get_printer_name_by_id(printer_id: Option<u32>) -> String {
     let saved_printers = crate::utils::printer_storage::load_printers();
     for (name, printer) in saved_printers {
         if let Some(id) = printer.printer_id
-            && id == printer_id {
-                return name;
-            }
+            && id == printer_id
+        {
+            return name;
+        }
     }
 
     get_default_printer_name().await

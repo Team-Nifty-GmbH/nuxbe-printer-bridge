@@ -3,13 +3,14 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use actix_multipart::Multipart;
-use actix_web::{Error, HttpResponse, Responder, get, post, web};
+use actix_web::{Error, HttpRequest, HttpResponse, Responder, get, post, web};
 use cursive::reexports::log::{debug, trace};
 use futures::{StreamExt, TryStreamExt};
 use printers::common::base::job::PrinterJobOptions;
 use printers::get_printer_by_name;
 use reqwest::Client;
 use tempfile::NamedTempFile;
+use tracing::warn;
 
 use crate::models::{Config, PrintRequest, PrinterList};
 use crate::services::print_job::fetch_print_jobs;
@@ -40,51 +41,52 @@ pub async fn print_file(
 
     while let Ok(Some(mut field)) = payload.try_next().await {
         if let Some(content_disposition) = field.content_disposition()
-            && let Some(filename) = content_disposition.get_filename() {
-                let filename_str = filename.to_string();
+            && let Some(filename) = content_disposition.get_filename()
+        {
+            let filename_str = filename.to_string();
 
-                if **verbose_debug {
-                    trace!("Processing file upload: {}", filename_str);
-                }
+            if **verbose_debug {
+                trace!("Processing file upload: {}", filename_str);
+            }
 
-                let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+            let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
 
-                while let Some(chunk) = field.next().await {
-                    let data = chunk?;
-                    temp_file.write_all(&data)?;
-                }
+            while let Some(chunk) = field.next().await {
+                let data = chunk?;
+                temp_file.write_all(&data)?;
+            }
 
-                let temp_path = temp_file.path().to_str().unwrap();
+            let temp_path = temp_file.path().to_str().unwrap();
 
-                if **verbose_debug {
-                    debug!("Printing file: {} to printer: {}", temp_path, printer_name);
-                }
-                match get_printer_by_name(printer_name) {
-                    Some(printer) => {
-                        let job_options = PrinterJobOptions {
-                            name: Some("API Print Job"),
-                            ..PrinterJobOptions::none()
-                        };
+            if **verbose_debug {
+                debug!("Printing file: {} to printer: {}", temp_path, printer_name);
+            }
+            match get_printer_by_name(printer_name) {
+                Some(printer) => {
+                    let job_options = PrinterJobOptions {
+                        name: Some("API Print Job"),
+                        ..PrinterJobOptions::none()
+                    };
 
-                        match printer.print_file(temp_path, job_options) {
-                            Ok(job_id) => {
-                                return Ok(HttpResponse::Ok().body(format!(
-                                    "Print job submitted successfully (Job ID: {})",
-                                    job_id
-                                )));
-                            }
-                            Err(e) => {
-                                return Ok(HttpResponse::InternalServerError()
-                                    .body(format!("Print failed: {}", e)));
-                            }
+                    match printer.print_file(temp_path, job_options) {
+                        Ok(job_id) => {
+                            return Ok(HttpResponse::Ok().body(format!(
+                                "Print job submitted successfully (Job ID: {})",
+                                job_id
+                            )));
+                        }
+                        Err(e) => {
+                            return Ok(HttpResponse::InternalServerError()
+                                .body(format!("Print failed: {}", e)));
                         }
                     }
-                    None => {
-                        return Ok(HttpResponse::BadRequest()
-                            .body(format!("Printer '{}' not found", printer_name)));
-                    }
+                }
+                None => {
+                    return Ok(HttpResponse::BadRequest()
+                        .body(format!("Printer '{}' not found", printer_name)));
                 }
             }
+        }
     }
 
     Ok(HttpResponse::BadRequest().body("No file provided"))
@@ -130,4 +132,17 @@ pub async fn check_printers_endpoint(
             HttpResponse::InternalServerError().body(format!("Failed to check printers: {}", e))
         }
     }
+}
+
+/// Catch-all handler to log unmatched requests
+pub async fn default_handler(req: HttpRequest) -> impl Responder {
+    warn!(
+        method = %req.method(),
+        path = %req.path(),
+        query = %req.query_string(),
+        peer = ?req.peer_addr(),
+        headers = ?req.headers(),
+        "Unmatched request received"
+    );
+    HttpResponse::NotFound().body("Not Found")
 }

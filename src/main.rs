@@ -3,11 +3,12 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use actix_web::{App, HttpServer, web};
+use actix_web::{App, HttpServer, middleware, web};
 use clap::{ArgAction, Parser, Subcommand};
 use local_ip_address::local_ip;
 use reqwest::Client;
 use tracing::info;
+use tracing_actix_web::TracingLogger;
 use tracing_subscriber::EnvFilter;
 
 mod api;
@@ -16,11 +17,13 @@ mod services;
 mod tests;
 mod utils;
 
-use api::routes::{check_jobs_endpoint, check_printers_endpoint, get_printers, print_file};
-use utils::config::load_config;
+use api::routes::{
+    check_jobs_endpoint, check_printers_endpoint, default_handler, get_printers, print_file,
+};
 use services::print_job::job_checker_task;
 use services::printer::{get_all_printers, printer_checker_task};
 use services::websocket::websocket_task;
+use utils::config::load_config;
 use utils::printer_storage::{load_printers, save_printers_if_changed};
 use utils::tui::run_tui;
 
@@ -51,16 +54,23 @@ async fn main() -> std::io::Result<()> {
     let env_filter = match cli.verbose {
         0 => EnvFilter::from_default_env()
             .add_directive("reverb_rs=warn".parse().unwrap())
-            .add_directive("rust_spooler=info".parse().unwrap()),
+            .add_directive("nuxbe_printer_bridge=info".parse().unwrap())
+            .add_directive("actix_http=warn".parse().unwrap()),
         1 => EnvFilter::from_default_env()
             .add_directive("reverb_rs=info".parse().unwrap())
-            .add_directive("rust_spooler=info".parse().unwrap()),
+            .add_directive("nuxbe_printer_bridge=info".parse().unwrap())
+            .add_directive("actix_http=info".parse().unwrap())
+            .add_directive("actix_web=info".parse().unwrap()),
         2 => EnvFilter::from_default_env()
             .add_directive("reverb_rs=debug".parse().unwrap())
-            .add_directive("rust_spooler=debug".parse().unwrap()),
+            .add_directive("nuxbe_printer_bridge=debug".parse().unwrap())
+            .add_directive("actix_http=debug".parse().unwrap())
+            .add_directive("actix_web=debug".parse().unwrap()),
         _ => EnvFilter::from_default_env()
             .add_directive("reverb_rs=trace".parse().unwrap())
-            .add_directive("rust_spooler=trace".parse().unwrap()),
+            .add_directive("nuxbe_printer_bridge=trace".parse().unwrap())
+            .add_directive("actix_http=trace".parse().unwrap())
+            .add_directive("actix_web=trace".parse().unwrap()),
     };
 
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
@@ -165,6 +175,10 @@ async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
     // API Server
     let api_server = HttpServer::new(move || {
         App::new()
+            .wrap(TracingLogger::default())
+            .wrap(middleware::Logger::new(
+                "%a %r %s %b %{Referer}i %{User-Agent}i %T",
+            ))
             .app_data(web::Data::new(Arc::clone(&config)))
             .app_data(web::Data::new(Arc::clone(&printers_set)))
             .app_data(web::Data::new(http_client.clone()))
@@ -173,6 +187,7 @@ async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
             .service(print_file)
             .service(check_jobs_endpoint)
             .service(check_printers_endpoint)
+            .default_service(web::route().to(default_handler))
     })
     .bind(format!("0.0.0.0:{}", api_port))?;
 

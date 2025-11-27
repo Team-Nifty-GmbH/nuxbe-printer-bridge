@@ -111,4 +111,15 @@ pub struct PrintJob {
     pub created_by: Option<u32>,
     pub updated_at: String,
     pub updated_by: Option<u32>,
+    /// Included printer relationship (when using ?include=printer)
+    pub printer: Option<PrintJobPrinter>,
+}
+
+/// Printer data included in print job response
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PrintJobPrinter {
+    pub id: u32,
+    pub name: String,
+    pub spooler_name: String,
+    pub is_active: bool,
 }

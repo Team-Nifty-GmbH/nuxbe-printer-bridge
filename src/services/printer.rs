@@ -128,8 +128,11 @@ pub async fn printer_checker_task(
     verbose_debug: bool,
 ) {
     let printers_data = web::Data::new(printers_data);
-    let config_data = web::Data::new(config);
+    let config_data = web::Data::new(config.clone());
     let client_data = web::Data::new(http_client);
+
+    let interval = { config.lock().unwrap().printer_check_interval };
+    info!("Starting printer sync (interval: {} minutes)", interval);
 
     match check_for_new_printers(
         printers_data.clone(),

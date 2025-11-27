@@ -1,6 +1,6 @@
 use reqwest::{Client, StatusCode};
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, error, trace};
+use tracing::{debug, error, info, trace};
 
 use crate::models::api::{ApiPrinter, ApiPrinterResponse};
 use crate::models::{Config, Printer};
@@ -14,20 +14,31 @@ pub async fn sync_printers_with_api(
     config: &Config,
     verbose_debug: bool,
 ) -> Result<HashMap<String, Printer>, Box<dyn std::error::Error>> {
+    info!(
+        local_count = local_printers.len(),
+        saved_count = saved_printers.len(),
+        api_url = %config.flux_url,
+        "Syncing printers with API"
+    );
+
     let mut updated_printers = local_printers.clone();
 
     let api_printers = fetch_printers_from_api(http_client, config, verbose_debug).await?;
+    info!(api_count = api_printers.len(), "Fetched printers from API");
+    // Map by spooler_name (CUPS printer name) since that's what identifies the printer on this system
     let mut api_printer_map = HashMap::new();
     for api_printer in api_printers {
-        api_printer_map.insert(api_printer.name.clone(), api_printer);
+        api_printer_map.insert(api_printer.spooler_name.clone(), api_printer);
     }
 
     for (name, printer) in &mut updated_printers {
+        // Match by spooler_name (which equals the local printer name)
         if let Some(api_printer) = api_printer_map.get(name) {
             printer.printer_id = api_printer.id;
             if verbose_debug {
                 trace!(
                     printer = %name,
+                    spooler_name = %api_printer.spooler_name,
                     id = api_printer.id.unwrap_or(0),
                     "Found existing printer in API"
                 );
@@ -70,24 +81,25 @@ pub async fn sync_printers_with_api(
 
     for name in removed_printers {
         if let Some(printer) = saved_printers.get(name)
-            && let Some(id) = printer.printer_id {
-                // Delete from API
-                match delete_printer_from_api(id, http_client, config, verbose_debug).await {
-                    Ok(_) => {
-                        if verbose_debug {
-                            debug!(printer = %name, id, "Deleted printer from API");
-                        }
-                    }
-                    Err(e) => {
-                        error!(
-                            printer = %name,
-                            id,
-                            error = %e,
-                            "Failed to delete printer from API"
-                        );
+            && let Some(id) = printer.printer_id
+        {
+            // Delete from API
+            match delete_printer_from_api(id, http_client, config, verbose_debug).await {
+                Ok(_) => {
+                    if verbose_debug {
+                        debug!(printer = %name, id, "Deleted printer from API");
                     }
                 }
+                Err(e) => {
+                    error!(
+                        printer = %name,
+                        id,
+                        error = %e,
+                        "Failed to delete printer from API"
+                    );
+                }
             }
+        }
     }
 
     // 5. Update changed printers
@@ -124,18 +136,26 @@ async fn fetch_printers_from_api(
     config: &Config,
     verbose_debug: bool,
 ) -> Result<Vec<ApiPrinter>, Box<dyn std::error::Error>> {
-    let api_url = format!("{}/api/printers", config.flux_url);
+    // Fetch all active printers - we'll match by spooler_name (CUPS printer name) locally
+    let api_url = format!("{}/api/printers?filter[is_active]=true", config.flux_url);
+
+    if verbose_debug {
+        trace!(url = %api_url, "Fetching printers from API");
+    }
 
     let response = with_auth_header(http_client.get(&api_url), config)
         .header("Accept", "application/json")
-        .json(&serde_json::json!({
-            "instance_name": config.instance_name
-        }))
         .send()
         .await?;
 
     if !response.status().is_success() {
-        return Err(format!("Failed to fetch printers from API: {}", response.status()).into());
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "Failed to fetch printers from API: {} - {}",
+            status, error_text
+        )
+        .into());
     }
 
     let response_text = response.text().await?;
@@ -157,7 +177,12 @@ async fn create_printer_in_api(
 
     // Convert to ApiPrinter
     let mut api_printer: ApiPrinter = printer.into();
-    api_printer.spooler_name = config.instance_name.clone(); // Set spooler_name instead of printer_server
+    // spooler_name is the CUPS printer name (used to identify the printer on this system)
+    api_printer.spooler_name = printer.name.clone();
+
+    if verbose_debug {
+        trace!(payload = ?api_printer, "Creating printer with payload");
+    }
 
     let response = with_auth_header(http_client.post(&api_url), config)
         .header("Accept", "application/json")
@@ -205,7 +230,12 @@ async fn update_printer_in_api(
 
     // Convert to ApiPrinter
     let mut api_printer: ApiPrinter = printer.into();
-    api_printer.spooler_name = config.instance_name.clone();
+    // spooler_name is the CUPS printer name
+    api_printer.spooler_name = printer.name.clone();
+
+    if verbose_debug {
+        trace!(payload = ?api_printer, "Updating printer with payload");
+    }
 
     let response = with_auth_header(http_client.put(&api_url), config)
         .header("Accept", "application/json")
