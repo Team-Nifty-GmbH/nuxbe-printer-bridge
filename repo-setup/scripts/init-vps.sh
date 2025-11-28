@@ -1,6 +1,6 @@
 #!/bin/bash
 # Initial VPS setup script - run this on the VPS as root
-# Usage: curl -sSL https://raw.githubusercontent.com/Team-Nifty-GmbH/rust-spooler/main/repo-setup/scripts/init-vps.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/Team-Nifty-GmbH/nuxbe-printer-bridge/main/repo-setup/scripts/init-vps.sh | bash
 
 set -e
 

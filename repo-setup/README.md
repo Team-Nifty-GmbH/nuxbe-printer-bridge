@@ -47,7 +47,7 @@ sudo systemctl reload nginx
 │       ├── Packages
 │       └── Packages.gz
 └── pool/main/
-    └── rust-spooler_0.1.0-1_amd64.deb
+    └── nuxbe-printer-bridge_0.1.0-1_amd64.deb
 ```
 
 ## Client Usage

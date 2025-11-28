@@ -1,6 +1,6 @@
 # Nuxbe Printer Bridge
 
-A Rust application that bridges between Nuxbe ERP and CUPS (Common UNIX Printing System) to manage printers and handle print jobs. It provides a REST API, real-time WebSocket integration, and automatic synchronization between the systems.
+A Rust application that bridges between Nuxbe ERP and CUPS (Common UNIX Printing System) to manage printers and handle print jobs. It provides real-time WebSocket integration, CLI printing, and automatic synchronization between the systems.
 
 ## Installation from APT Repository
 
@@ -29,11 +29,10 @@ sudo apt install nuxbe-printer-bridge
   - Automated download and printing of documents
   - Job status updates after printing
 
-- **REST API Endpoints**:
-  - `GET /printers` - List all available printers
-  - `POST /print?printer=<printer_name>` - Upload and print a file
-  - `GET /check_printers` - Manually trigger printer synchronization
-  - `GET /check_jobs` - Manually check for pending print jobs
+- **CLI Printing**:
+  - Print local files directly from command line
+  - List available printers
+  - Custom job names
 
 - **Configuration Options**:
   - Simple text-based configuration interface
@@ -87,7 +86,7 @@ cargo build --release
 The application can be configured using the built-in configuration tool:
 
 ```bash
-./target/release/rust-spooler config
+nuxbe-printer-bridge config
 ```
 
 The configuration is stored in `~/.config/nuxbe-printer-bridge/config.json` and includes:
@@ -97,30 +96,54 @@ The configuration is stored in `~/.config/nuxbe-printer-bridge/config.json` and 
 - `job_check_interval`: How often to check for print jobs (minutes)
 - `nuxbe_url`: Base URL for the Nuxbe ERP API
 - `nuxbe_api_token`: Authentication token for the API
-- `api_port`: Port to run the API server on
 - `reverb_disabled`: Whether to disable WebSocket and use polling instead
 - `reverb_*` settings: Configuration for Laravel Reverb WebSocket connection
 
 ## Usage
 
-### Running the Application
+### Running the Server
 
-Start the application with:
+Start the background service:
 
-```bash
-./target/release/nuxbe-printer-bridge run
-```
-
-Or if installed via APT:
 ```bash
 nuxbe-printer-bridge run
 ```
 
-By default, the application will:
+With verbose logging:
+```bash
+nuxbe-printer-bridge -v run      # info level
+nuxbe-printer-bridge -vv run     # debug level
+nuxbe-printer-bridge -vvv run    # trace level
+```
+
+The server will:
 1. Detect all available CUPS printers
 2. Synchronize printers with the Nuxbe ERP system
-3. Begin listening for print jobs via WebSocket or polling
-4. Start the REST API server on the configured port
+3. Listen for print jobs via WebSocket or polling
+
+### CLI Commands
+
+**List available printers:**
+```bash
+nuxbe-printer-bridge printers
+```
+
+**Print a file:**
+```bash
+# Print to default printer
+nuxbe-printer-bridge print -f /path/to/document.pdf
+
+# Print to specific printer
+nuxbe-printer-bridge print -f /path/to/document.pdf -p "My Printer"
+
+# Print with custom job name
+nuxbe-printer-bridge print -f /path/to/document.pdf -n "Invoice #123"
+```
+
+**Configure settings:**
+```bash
+nuxbe-printer-bridge config
+```
 
 ### Printer Synchronization Flow
 
@@ -162,7 +185,7 @@ Requires=cups.service
 [Service]
 Type=simple
 User=<your-username>
-ExecStart=/path/to/your/nuxbe-printer-bridge run
+ExecStart=/usr/bin/nuxbe-printer-bridge run
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -177,32 +200,6 @@ WantedBy=multi-user.target
 sudo systemctl daemon-reload
 sudo systemctl enable nuxbe-printer-bridge.service
 sudo systemctl start nuxbe-printer-bridge.service
-```
-
-## API Usage Examples
-
-### List All Printers
-
-```bash
-curl http://localhost:8080/printers
-```
-
-### Print a File
-
-```bash
-curl -X POST -F "file=@/path/to/document.pdf" "http://localhost:8080/print?printer=MyPrinter"
-```
-
-### Check for New Printers
-
-```bash
-curl http://localhost:8080/check_printers
-```
-
-### Check for New Print Jobs
-
-```bash
-curl http://localhost:8080/check_jobs
 ```
 
 ## Laravel Reverb Integration
@@ -236,8 +233,7 @@ lpstat -v
 1. Ensure your instance_name is correctly configured
 2. Check that the API token has the necessary permissions
 3. Verify printer IDs match between the API and local system
-4. Test a manual job check with `curl http://localhost:8080/check_jobs`
-5. Check CUPS logs for printing errors:
+4. Check CUPS logs for printing errors:
 ```bash
 sudo journalctl -u cups.service
 ```

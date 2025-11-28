@@ -3,7 +3,7 @@
 
 set -e
 
-echo "🚀 Starting VPS deployment for rust-spooler Debian repository"
+echo "🚀 Starting VPS deployment for nuxbe-printer-bridge Debian repository"
 
 # Update system
 echo "📦 Updating system packages..."

@@ -3,7 +3,7 @@
 
 set -e
 
-PACKAGE_NAME="rust-spooler"
+PACKAGE_NAME="nuxbe-printer-bridge"
 VERSION="0.1.0"
 
 echo "Building ${PACKAGE_NAME} v${VERSION} .deb package..."
@@ -18,7 +18,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source ~/.cargo/env
 
 # Build the package
-cd /opt/rust-spooler
+cd /opt/nuxbe-printer-bridge
 dpkg-buildpackage -us -uc -b
 
 echo "Package built successfully!"
