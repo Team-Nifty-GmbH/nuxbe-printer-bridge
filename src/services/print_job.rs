@@ -328,12 +328,12 @@ async fn get_printer_name_by_id(printer_id: Option<u32>) -> String {
 /// Background task to periodically check for print jobs
 pub async fn job_checker_task(config: Arc<Mutex<Config>>, http_client: Client) {
     loop {
-        let disabled = {
+        let reverb_enabled = {
             let guard = config.lock().unwrap();
             !guard.reverb_disabled
         };
 
-        if disabled {
+        if reverb_enabled {
             info!("Polling is disabled. Using Reverb WebSockets instead");
             return;
         }

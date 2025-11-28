@@ -225,13 +225,15 @@ async fn update_printer_in_api(
         return Err("Cannot update printer without an ID".into());
     }
 
-    let printer_id = printer.printer_id.unwrap();
-    let api_url = format!("{}/api/printers/{}", config.flux_url, printer_id);
+    // PUT /api/printers expects ID in the request body, not URL path
+    let api_url = format!("{}/api/printers", config.flux_url);
 
-    // Convert to ApiPrinter
+    // Convert to ApiPrinter - id will be included in the JSON body
     let mut api_printer: ApiPrinter = printer.into();
     // spooler_name is the CUPS printer name
     api_printer.spooler_name = printer.name.clone();
+    // Ensure ID is set for update
+    api_printer.id = printer.printer_id;
 
     if verbose_debug {
         trace!(payload = ?api_printer, "Updating printer with payload");

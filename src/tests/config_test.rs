@@ -7,7 +7,7 @@ use crate::utils::config::load_config;
 // Helper to create a test config directory
 fn setup_test_config_dir() -> (tempfile::TempDir, PathBuf) {
     let dir = tempdir().unwrap();
-    let config_path = dir.path().join(".config/flux-spooler");
+    let config_path = dir.path().join(".config/nuxbe-printer-bridge");
     fs::create_dir_all(&config_path).unwrap();
     (dir, config_path)
 }

@@ -1,6 +1,5 @@
 use clap::Parser;
-#[allow(dead_code)]
-mod api;
+
 mod cli;
 mod models;
 mod server;
@@ -8,7 +7,7 @@ mod services;
 mod tests;
 mod utils;
 
-use cli::{build_env_filter, list_printers, print_local_file, Cli, Commands};
+use cli::{Cli, Commands, build_env_filter, list_printers, print_local_file};
 use server::run_server;
 use utils::tui::run_tui;
 

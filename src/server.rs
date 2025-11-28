@@ -19,7 +19,7 @@ pub async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
     initialize_printers(&printers_set, verbose_debug).await;
     spawn_background_tasks(&config, &http_client, &printers_set, verbose_debug);
 
-    info!("Print server started (API disabled, running background tasks only)");
+    info!("Print server started");
 
     tokio::signal::ctrl_c().await?;
     info!("Shutting down...");
@@ -28,10 +28,7 @@ pub async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
 }
 
 /// Initialize printers from system and sync with saved state
-async fn initialize_printers(
-    printers_set: &Arc<Mutex<HashSet<String>>>,
-    verbose_debug: bool,
-) {
+async fn initialize_printers(printers_set: &Arc<Mutex<HashSet<String>>>, verbose_debug: bool) {
     let system_printers = get_all_printers(verbose_debug).await;
     let mut set = printers_set.lock().unwrap();
 

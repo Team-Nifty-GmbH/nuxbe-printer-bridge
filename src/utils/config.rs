@@ -4,7 +4,7 @@ use std::fs;
 /// Path to the config directory
 pub fn config_dir() -> std::path::PathBuf {
     let home_dir = dirs::home_dir().expect("Failed to get home directory");
-    home_dir.join(".config/flux-spooler")
+    home_dir.join(".config/nuxbe-printer-bridge")
 }
 
 /// Path to the config file

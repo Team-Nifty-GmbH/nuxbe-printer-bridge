@@ -40,6 +40,8 @@ impl Default for Config {
     }
 }
 
+// Used by API (currently disabled)
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize)]
 pub struct PrintRequest {
     pub printer: String,
@@ -55,6 +57,8 @@ pub struct Printer {
     pub printer_id: Option<u32>,
 }
 
+// Used by API (currently disabled)
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize)]
 pub struct PrinterList {
     pub printers: Vec<Printer>,
