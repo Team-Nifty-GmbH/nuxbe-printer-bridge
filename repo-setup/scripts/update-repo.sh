@@ -18,11 +18,25 @@ else
     exit 0
 fi
 
-# Regenerate Packages files
+# Regenerate Packages files (filtered by architecture)
 cd ${REPO_DIR}
-sudo dpkg-scanpackages pool/main /dev/null | sudo tee dists/stable/main/binary-amd64/Packages > /dev/null
-sudo dpkg-scanpackages pool/main /dev/null | sudo tee dists/stable/main/binary-armhf/Packages > /dev/null
-sudo dpkg-scanpackages pool/main /dev/null | sudo tee dists/stable/main/binary-arm64/Packages > /dev/null
+
+# Generate Packages for each architecture by filtering dpkg-scanpackages output
+# Use -m flag to include all versions/architectures (multiversion mode)
+for arch in amd64 armhf arm64; do
+    sudo dpkg-scanpackages -m pool/main /dev/null 2>/dev/null | \
+        awk -v arch="$arch" '
+            BEGIN { RS=""; FS="\n"; ORS="\n\n" }
+            /Architecture: / {
+                for (i=1; i<=NF; i++) {
+                    if ($i ~ /^Architecture: /) {
+                        split($i, a, ": ")
+                        if (a[2] == arch) { print; break }
+                    }
+                }
+            }
+        ' | sudo tee dists/stable/main/binary-${arch}/Packages > /dev/null
+done
 
 # Compress Packages files
 sudo gzip -kf dists/stable/main/binary-amd64/Packages
