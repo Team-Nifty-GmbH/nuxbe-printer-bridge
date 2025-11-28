@@ -25,14 +25,17 @@ pub async fn sync_printers_with_api(
 
     let api_printers = fetch_printers_from_api(http_client, config, verbose_debug).await?;
     info!(api_count = api_printers.len(), "Fetched printers from API");
-    // Map by spooler_name (CUPS printer name) since that's what identifies the printer on this system
+    // Filter by spooler_name (instance name) and map by printer name
     let mut api_printer_map = HashMap::new();
     for api_printer in api_printers {
-        api_printer_map.insert(api_printer.spooler_name.clone(), api_printer);
+        // Only include printers that belong to this instance
+        if api_printer.spooler_name == config.instance_name {
+            api_printer_map.insert(api_printer.name.clone(), api_printer);
+        }
     }
 
     for (name, printer) in &mut updated_printers {
-        // Match by spooler_name (which equals the local printer name)
+        // Match by printer name (for printers belonging to this instance)
         if let Some(api_printer) = api_printer_map.get(name) {
             printer.printer_id = api_printer.id;
             if verbose_debug {
@@ -136,8 +139,12 @@ async fn fetch_printers_from_api(
     config: &Config,
     verbose_debug: bool,
 ) -> Result<Vec<ApiPrinter>, Box<dyn std::error::Error>> {
-    // Fetch all active printers - we'll match by spooler_name (CUPS printer name) locally
-    let api_url = format!("{}/api/printers?filter[is_active]=true", config.flux_url);
+    // Fetch active printers for this instance (spooler_name = instance_name)
+    let api_url = format!(
+        "{}/api/printers?filter[is_active]=true&filter[spooler_name]={}",
+        config.flux_url,
+        urlencoding::encode(&config.instance_name)
+    );
 
     if verbose_debug {
         trace!(url = %api_url, "Fetching printers from API");
@@ -177,8 +184,8 @@ async fn create_printer_in_api(
 
     // Convert to ApiPrinter
     let mut api_printer: ApiPrinter = printer.into();
-    // spooler_name is the CUPS printer name (used to identify the printer on this system)
-    api_printer.spooler_name = printer.name.clone();
+    // spooler_name is the instance name (identifies which print server this printer belongs to)
+    api_printer.spooler_name = config.instance_name.clone();
 
     if verbose_debug {
         trace!(payload = ?api_printer, "Creating printer with payload");
@@ -230,8 +237,8 @@ async fn update_printer_in_api(
 
     // Convert to ApiPrinter - id will be included in the JSON body
     let mut api_printer: ApiPrinter = printer.into();
-    // spooler_name is the CUPS printer name
-    api_printer.spooler_name = printer.name.clone();
+    // spooler_name is the instance name (identifies which print server this printer belongs to)
+    api_printer.spooler_name = config.instance_name.clone();
     // Ensure ID is set for update
     api_printer.id = printer.printer_id;
 

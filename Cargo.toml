@@ -1,6 +1,6 @@
 [package]
 name = "nuxbe-printer-bridge"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 
 [dependencies]
@@ -19,6 +19,7 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter", "std"] }
 openssl-sys = { version = "0.9", features = ["vendored"] }
 printers = "2.2.0"
 tracing = "0.1.41"
+urlencoding = "2.1.3"
 
 [features]
 default = []

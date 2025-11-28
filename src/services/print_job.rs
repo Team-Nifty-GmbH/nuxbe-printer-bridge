@@ -225,7 +225,8 @@ pub async fn fetch_print_jobs(
         info!(job_count = jobs.len(), "Processing print jobs");
 
         for job in &jobs {
-            // Get the printer's spooler_name (CUPS printer name) from included printer data
+            // Get the CUPS printer name from included printer data
+            // spooler_name = instance, printer.name = CUPS printer
             let printer_name = if let Some(ref printer) = job.printer {
                 debug!(
                     job_id = job.id,
@@ -233,7 +234,7 @@ pub async fn fetch_print_jobs(
                     spooler_name = %printer.spooler_name,
                     "Processing print job with included printer"
                 );
-                printer.spooler_name.clone()
+                printer.name.clone()
             } else {
                 debug!(
                     job_id = job.id,
