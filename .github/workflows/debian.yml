@@ -1,8 +1,7 @@
 name: Build Debian Package
 
 on:
-  release:
-    types: [published]
+  # Only trigger after Release workflow completes (not on release publish, which races)
   workflow_run:
     workflows: ["Release"]
     types:
@@ -24,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'release' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     strategy:
       matrix:
@@ -43,18 +41,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ -z "${{ github.event.inputs.tag_name }}" ]; then
-              echo "Finding latest release tag..."
-              RELEASE_TAG=$(gh api repos/${{ github.repository }}/releases/latest | jq -r '.tag_name')
-            else
-              RELEASE_TAG="${{ github.event.inputs.tag_name }}"
-            fi
-          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
-            echo "Triggered by Release workflow completion, finding latest release..."
-            RELEASE_TAG=$(gh api repos/${{ github.repository }}/releases/latest | jq -r '.tag_name')
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            RELEASE_TAG="${{ github.event.inputs.tag_name }}"
           else
-            RELEASE_TAG=${{ github.event.release.tag_name }}
+            # For workflow_run or workflow_dispatch without tag, get latest release
+            echo "Finding latest release tag..."
+            RELEASE_TAG=$(gh api repos/${{ github.repository }}/releases/latest | jq -r '.tag_name')
           fi
 
           VERSION=${RELEASE_TAG#v}
@@ -210,16 +202,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ -z "${{ github.event.inputs.tag_name }}" ]; then
-              RELEASE_TAG=$(gh api repos/${{ github.repository }}/releases/latest | jq -r '.tag_name')
-            else
-              RELEASE_TAG="${{ github.event.inputs.tag_name }}"
-            fi
-          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
-            RELEASE_TAG=$(gh api repos/${{ github.repository }}/releases/latest | jq -r '.tag_name')
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            RELEASE_TAG="${{ github.event.inputs.tag_name }}"
           else
-            RELEASE_TAG=${{ github.event.release.tag_name }}
+            # For workflow_run or workflow_dispatch without tag, get latest release
+            RELEASE_TAG=$(gh api repos/${{ github.repository }}/releases/latest | jq -r '.tag_name')
           fi
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
           echo "Using release tag: $RELEASE_TAG"
