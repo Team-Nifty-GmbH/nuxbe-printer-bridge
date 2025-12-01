@@ -24,11 +24,11 @@ pub enum Commands {
     /// Configure application settings using a text-based UI
     Config,
 
-    /// Print a file to a specified printer
+    /// Print a file to a specified printer, or fetch and print a job from the API
     Print {
-        /// Path to the file to print
-        #[arg(short, long)]
-        file: String,
+        /// Path to the file to print (required unless --job is specified)
+        #[arg(short, long, required_unless_present = "job")]
+        file: Option<String>,
 
         /// Name of the printer to use (uses default printer if not specified)
         #[arg(short, long)]
@@ -37,6 +37,10 @@ pub enum Commands {
         /// Job name (optional)
         #[arg(short = 'n', long)]
         job_name: Option<String>,
+
+        /// Fetch and print a specific job by ID from the API
+        #[arg(short = 'j', long)]
+        job: Option<u32>,
     },
 
     /// List available printers
@@ -69,7 +73,7 @@ pub fn build_env_filter(verbose: u8) -> EnvFilter {
 }
 
 /// Print a local file to a printer
-pub fn print_local_file(file_path: &str, printer_name: Option<&str>, job_name: Option<&str>) {
+pub fn print_local_file(file_path: &str, printer_name: Option<&str>, job_name: Option<&str>) -> bool {
     if !Path::new(file_path).exists() {
         eprintln!("Error: File '{}' not found", file_path);
         std::process::exit(1);
@@ -108,6 +112,7 @@ pub fn print_local_file(file_path: &str, printer_name: Option<&str>, job_name: O
             println!("  Printer: {}", printer.name);
             println!("  File: {}", file_path);
             println!("  CUPS Job ID: {}", job_id);
+            true
         }
         Err(e) => {
             eprintln!("Error: Failed to print file: {}", e);

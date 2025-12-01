@@ -373,3 +373,114 @@ async fn get_default_printer_name() -> String {
 
     "default".to_string()
 }
+
+/// Single print job response from API (when fetching by ID)
+#[derive(serde::Deserialize, Debug)]
+struct SinglePrintJobResponse {
+    #[allow(dead_code)]
+    status: u16,
+    data: PrintJob,
+}
+
+/// Fetch a single print job by ID from the API and print it
+pub async fn fetch_and_print_job_by_id(
+    job_id: u32,
+    http_client: &Client,
+    config: &Config,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let job_url = format!(
+        "{}/api/print-jobs/{}?include=printer",
+        config.flux_url, job_id
+    );
+
+    info!(job_id, url = %job_url, "Fetching print job by ID");
+
+    let response = with_auth_header(http_client.get(&job_url), config)
+        .header("Accept", "application/json")
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        return Err(format!("Failed to fetch print job {}: {} - {}", job_id, status, error_text).into());
+    }
+
+    let response_text = response.text().await?;
+    let parsed: SinglePrintJobResponse = serde_json::from_str(&response_text)
+        .map_err(|e| format!("Failed to parse job response: {}", e))?;
+
+    let job = parsed.data;
+
+    println!("Print Job #{}", job.id);
+    println!("  Media ID: {}", job.media_id);
+    println!("  Completed: {}", job.is_completed);
+
+    // Get the CUPS printer name
+    let printer_name = if let Some(ref printer) = job.printer {
+        println!("  Printer: {} (spooler: {})", printer.name, printer.spooler_name);
+        printer.name.clone()
+    } else {
+        let name = get_printer_name_by_id(job.printer_id).await;
+        println!("  Printer: {}", name);
+        name
+    };
+
+    // Download the file
+    let file_url = format!("{}/api/media/private/{}", config.flux_url, job.media_id);
+    println!("  Downloading file...");
+
+    let file_response = with_auth_header(http_client.get(&file_url), config)
+        .header("Accept", "application/octet-stream")
+        .send()
+        .await?;
+
+    if !file_response.status().is_success() {
+        return Err(format!(
+            "Failed to download file for media ID {}: {}",
+            job.media_id,
+            file_response.status()
+        )
+        .into());
+    }
+
+    let file_content = file_response.bytes().await?;
+
+    // Write to temp file and print
+    let mut temp_file = NamedTempFile::new()?;
+    temp_file.write_all(&file_content)?;
+    let temp_path = temp_file.path().to_str().unwrap();
+
+    match get_printer_by_name(&printer_name) {
+        Some(printer) => {
+            let job_options = PrinterJobOptions {
+                name: Some(&format!("Print Job {}", job.id)),
+                ..PrinterJobOptions::none()
+            };
+
+            match printer.print_file(temp_path, job_options) {
+                Ok(cups_job_id) => {
+                    println!("  Print job submitted successfully!");
+                    println!("  CUPS Job ID: {}", cups_job_id);
+
+                    // Update job status to completed
+                    match update_print_job_status(job.id, true, http_client, config).await {
+                        Ok(_) => println!("  Status updated to completed"),
+                        Err(e) => eprintln!("  Warning: Failed to update job status: {}", e),
+                    }
+
+                    Ok(())
+                }
+                Err(e) => Err(format!("Failed to print: {}", e).into()),
+            }
+        }
+        None => {
+            eprintln!("Error: Printer '{}' not found", printer_name);
+            eprintln!("Available printers:");
+            for p in get_printers() {
+                eprintln!("  - {}", p.name);
+            }
+            Err(format!("Printer '{}' not found", printer_name).into())
+        }
+    }
+}
