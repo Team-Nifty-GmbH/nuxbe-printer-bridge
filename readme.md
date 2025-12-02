@@ -138,6 +138,9 @@ nuxbe-printer-bridge print -f /path/to/document.pdf -p "My Printer"
 
 # Print with custom job name
 nuxbe-printer-bridge print -f /path/to/document.pdf -n "Invoice #123"
+
+# Fetch and print a job from the API by ID
+nuxbe-printer-bridge print --job 123
 ```
 
 **Configure settings:**
@@ -163,10 +166,10 @@ All API requests include the `instance_name` in the request body when required.
 For print jobs, the application:
 
 1. Receives job notifications via WebSocket or polling
-2. Validates that the job is for this print server instance
+2. On WebSocket connect, fetches any pending jobs created while offline
 3. Downloads the file to be printed using the media ID
-4. Prints the file on the appropriate printer
-5. Updates the job status to `is_printed = true` via PUT to `/api/print-jobs/{job_id}`
+4. Prints the file on the appropriate printer (falls back to default if specified printer not found)
+5. Updates the job status to `is_completed = true` via PUT to `/api/print-jobs`
 
 ### Setting up as a System Service (Linux)
 
@@ -204,7 +207,14 @@ sudo systemctl start nuxbe-printer-bridge.service
 
 ## Laravel Reverb Integration
 
-The application uses Laravel Reverb for real-time print job notifications. It listens for "PrintJobCreated" events on the appropriate channel.
+The application uses Laravel Reverb for real-time print job notifications. It subscribes to the `private-print_job.` channel and listens for `.PrintJobCreated` events.
+
+When a print job event is received, the application:
+1. Extracts the job ID from the event payload
+2. Fetches the full job details from the API
+3. Processes and prints the job
+
+On initial WebSocket connection, the application automatically fetches any pending jobs from the API to process jobs that were created while the application was offline.
 
 The WebSocket connection automatically reconnects if it fails, with a configurable delay between reconnection attempts.
 

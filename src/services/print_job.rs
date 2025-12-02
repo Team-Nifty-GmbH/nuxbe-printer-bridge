@@ -8,102 +8,8 @@ use tempfile::NamedTempFile;
 use tokio::time;
 use tracing::{debug, error, info};
 
-use crate::models::{Config, PrintJob, PrintJobResponse, WebsocketPrintJob};
+use crate::models::{Config, PrintJob, PrintJobResponse};
 use crate::utils::http::with_auth_header;
-
-/// Process a print job received through WebSocket
-pub async fn handle_print_job(
-    print_job: WebsocketPrintJob,
-    http_client: &Client,
-    config: &mut Config,
-) -> Result<(), Box<dyn std::error::Error>> {
-    info!(
-        printer = %print_job.printer_name,
-        spooler = %print_job.spooler_name,
-        media_id = %print_job.media_id,
-        "Processing WebSocket print job"
-    );
-
-    if print_job.spooler_name != config.instance_name {
-        debug!(
-            requested_spooler = %print_job.spooler_name,
-            our_spooler = %config.instance_name,
-            "Ignoring job for different printer server"
-        );
-        return Ok(());
-    }
-
-    let file_url = format!(
-        "{}/api/media/private/{}",
-        config.flux_url, print_job.media_id
-    );
-
-    let file_response = with_auth_header(http_client.get(&file_url), config)
-        .header("Accept", "application/octet-stream")
-        .send()
-        .await?;
-
-    if !file_response.status().is_success() {
-        return Err(format!(
-            "Failed to download file for media ID {}: {}",
-            print_job.media_id,
-            file_response.status()
-        )
-        .into());
-    }
-
-    let file_content = file_response.bytes().await?;
-
-    let mut temp_file = NamedTempFile::new()?;
-    temp_file.write_all(&file_content)?;
-    let temp_path = temp_file.path().to_str().unwrap();
-    match get_printer_by_name(&print_job.printer_name) {
-        Some(printer) => {
-            let job_options = PrinterJobOptions {
-                name: Some(&format!("Media ID {}", print_job.media_id)),
-                ..PrinterJobOptions::none()
-            };
-
-            match printer.print_file(temp_path, job_options) {
-                Ok(job_id) => {
-                    info!(
-                        media_id = %print_job.media_id,
-                        printer = %print_job.printer_name,
-                        cups_job_id = job_id,
-                        "Successfully printed document"
-                    );
-
-                    if let Some(job_id) = print_job.job_id {
-                        match update_print_job_status(job_id, true, http_client, config).await {
-                            Ok(_) => info!(job_id, "Updated print job status to completed"),
-                            Err(e) => {
-                                error!(job_id, error = %e, "Failed to update print job status")
-                            }
-                        }
-                    }
-
-                    Ok(())
-                }
-                Err(e) => {
-                    let error_msg = format!(
-                        "Failed to print media ID {} on printer {}: {}",
-                        print_job.media_id, print_job.printer_name, e
-                    );
-                    error!("{}", error_msg);
-                    Err(error_msg.into())
-                }
-            }
-        }
-        None => {
-            let error_msg = format!(
-                "Printer '{}' not found for media ID {}",
-                print_job.printer_name, print_job.media_id
-            );
-            error!("{}", error_msg);
-            Err(error_msg.into())
-        }
-    }
-}
 
 async fn update_print_job_status(
     job_id: u32,
@@ -133,6 +39,45 @@ async fn update_print_job_status(
     }
 
     Ok(())
+}
+
+/// Fetch pending print job IDs from the API (Send-safe version for tokio::spawn)
+pub async fn fetch_pending_job_ids(
+    http_client: &Client,
+    config: &Config,
+) -> Result<Vec<u32>, String> {
+    let jobs_url = format!(
+        "{}/api/print-jobs?filter[is_completed]=false&include=printer",
+        config.flux_url
+    );
+
+    debug!(url = %jobs_url, "Fetching pending print job IDs");
+
+    let response = match with_auth_header(http_client.get(&jobs_url), config)
+        .header("Accept", "application/json")
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return Err(format!("Failed to fetch print jobs: {}", e)),
+    };
+
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch print jobs: {}", response.status()));
+    }
+
+    let response_text = match response.text().await {
+        Ok(t) => t,
+        Err(e) => return Err(format!("Failed to read response: {}", e)),
+    };
+
+    let parsed_response: PrintJobResponse = match serde_json::from_str(&response_text) {
+        Ok(parsed) => parsed,
+        Err(e) => return Err(format!("Failed to parse print jobs: {}", e)),
+    };
+
+    // Return just the IDs
+    Ok(parsed_response.data.data.iter().map(|job| job.id).collect())
 }
 
 /// Fetch print jobs from the API and process them
@@ -403,7 +348,11 @@ pub async fn fetch_and_print_job_by_id(
     if !response.status().is_success() {
         let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("Failed to fetch print job {}: {} - {}", job_id, status, error_text).into());
+        return Err(format!(
+            "Failed to fetch print job {}: {} - {}",
+            job_id, status, error_text
+        )
+        .into());
     }
 
     let response_text = response.text().await?;
@@ -424,7 +373,10 @@ pub async fn fetch_and_print_job_by_id(
 
     // Get the CUPS printer name
     let printer_name = if let Some(ref printer) = job.printer {
-        println!("  Printer: {} (spooler: {})", printer.name, printer.spooler_name);
+        println!(
+            "  Printer: {} (spooler: {})",
+            printer.name, printer.spooler_name
+        );
         printer.name.clone()
     } else {
         let name = get_printer_name_by_id(job.printer_id).await;
@@ -457,36 +409,44 @@ pub async fn fetch_and_print_job_by_id(
     temp_file.write_all(&file_content)?;
     let temp_path = temp_file.path().to_str().unwrap();
 
-    match get_printer_by_name(&printer_name) {
-        Some(printer) => {
-            let job_options = PrinterJobOptions {
-                name: Some(&format!("Print Job {}", job.id)),
-                ..PrinterJobOptions::none()
-            };
-
-            match printer.print_file(temp_path, job_options) {
-                Ok(cups_job_id) => {
-                    println!("  Print job submitted successfully!");
-                    println!("  CUPS Job ID: {}", cups_job_id);
-
-                    // Update job status to completed
-                    match update_print_job_status(job.id, true, http_client, config).await {
-                        Ok(_) => println!("  Status updated to completed"),
-                        Err(e) => eprintln!("  Warning: Failed to update job status: {}", e),
-                    }
-
-                    Ok(())
-                }
-                Err(e) => Err(format!("Failed to print: {}", e).into()),
-            }
-        }
+    // Try to find the specified printer, or fall back to default
+    let printer = match get_printer_by_name(&printer_name) {
+        Some(p) => p,
         None => {
-            eprintln!("Error: Printer '{}' not found", printer_name);
-            eprintln!("Available printers:");
-            for p in get_printers() {
-                eprintln!("  - {}", p.name);
+            // Printer not found, try to use default printer
+            let printers = get_printers();
+            if printers.is_empty() {
+                eprintln!("Error: No printers available");
+                return Err("No printers available".into());
             }
-            Err(format!("Printer '{}' not found", printer_name).into())
+            let default_printer = printers.into_iter().next().unwrap();
+            eprintln!(
+                "  Warning: Printer '{}' not found, using default: {}",
+                printer_name, default_printer.name
+            );
+            default_printer
         }
+    };
+
+    let job_options = PrinterJobOptions {
+        name: Some(&format!("Print Job {}", job.id)),
+        ..PrinterJobOptions::none()
+    };
+
+    match printer.print_file(temp_path, job_options) {
+        Ok(cups_job_id) => {
+            println!("  Print job submitted successfully!");
+            println!("  Printer: {}", printer.name);
+            println!("  CUPS Job ID: {}", cups_job_id);
+
+            // Update job status to completed
+            match update_print_job_status(job.id, true, http_client, config).await {
+                Ok(_) => println!("  Status updated to completed"),
+                Err(e) => eprintln!("  Warning: Failed to update job status: {}", e),
+            }
+
+            Ok(())
+        }
+        Err(e) => Err(format!("Failed to print: {}", e).into()),
     }
 }

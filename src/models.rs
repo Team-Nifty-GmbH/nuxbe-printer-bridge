@@ -72,14 +72,6 @@ pub struct PageLink {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct WebsocketPrintJob {
-    pub printer_name: String,
-    pub spooler_name: String,
-    pub media_id: String,
-    pub job_id: Option<u32>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
 pub struct PrintJobResponse {
     pub status: u16,
     pub data: PrintJobPaginatedData,

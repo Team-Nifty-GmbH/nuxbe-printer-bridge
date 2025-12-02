@@ -36,7 +36,9 @@ async fn main() -> std::io::Result<()> {
                 // Fetch and print job from API
                 let config = load_config();
                 if config.flux_api_token.is_none() {
-                    eprintln!("Error: No API token configured. Run 'nuxbe-printer-bridge config' first.");
+                    eprintln!(
+                        "Error: No API token configured. Run 'nuxbe-printer-bridge config' first."
+                    );
                     std::process::exit(1);
                 }
 

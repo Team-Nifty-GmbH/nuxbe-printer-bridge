@@ -73,7 +73,11 @@ pub fn build_env_filter(verbose: u8) -> EnvFilter {
 }
 
 /// Print a local file to a printer
-pub fn print_local_file(file_path: &str, printer_name: Option<&str>, job_name: Option<&str>) -> bool {
+pub fn print_local_file(
+    file_path: &str,
+    printer_name: Option<&str>,
+    job_name: Option<&str>,
+) -> bool {
     if !Path::new(file_path).exists() {
         eprintln!("Error: File '{}' not found", file_path);
         std::process::exit(1);

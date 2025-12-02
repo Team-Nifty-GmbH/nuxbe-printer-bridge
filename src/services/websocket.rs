@@ -1,5 +1,5 @@
-use crate::models::{Config, WebsocketPrintJob};
-use crate::services::print_job::handle_print_job;
+use crate::models::Config;
+use crate::services::print_job::fetch_and_print_job_by_id;
 use async_trait::async_trait;
 use reqwest::Client;
 use reverb_rs::private_channel;
@@ -8,7 +8,7 @@ use serde_json;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
     let disabled = {
@@ -61,7 +61,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
                 info!(socket_id, "Connection established");
 
                 // Now that we have a socket_id, subscribe to the channel
-                let channel_name = "FluxErp.Models.PrintJobs";
+                let channel_name = "print_job.";
                 let channel = private_channel(channel_name);
 
                 // Use the client directly - no mutex lock needed
@@ -75,46 +75,92 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
 
             async fn on_channel_subscription_succeeded(&self, channel: &str) {
                 info!(channel, "Successfully subscribed to channel");
+
+                // Fetch any pending jobs that were created while offline
+                info!("Fetching pending print jobs from API...");
+                let client_clone = self.http_client.clone();
+                let config_clone = self.config.clone();
+
+                tokio::spawn(async move {
+                    let config_copy = {
+                        let guard = config_clone.lock().unwrap();
+                        guard.clone()
+                    };
+
+                    // Fetch pending jobs and collect their IDs
+                    let job_ids: Vec<u32> = match crate::services::print_job::fetch_pending_job_ids(&client_clone, &config_copy).await {
+                        Ok(ids) => ids,
+                        Err(e) => {
+                            error!(error = %e, "Failed to fetch pending print jobs");
+                            return;
+                        }
+                    };
+
+                    if job_ids.is_empty() {
+                        info!("No pending print jobs found");
+                        return;
+                    }
+
+                    info!(count = job_ids.len(), "Found pending print jobs, processing...");
+                    for job_id in job_ids {
+                        info!(job_id, "Processing pending job");
+                        if let Err(e) = crate::services::print_job::fetch_and_print_job_by_id(
+                            job_id,
+                            &client_clone,
+                            &config_copy,
+                        ).await {
+                            error!(job_id, error = %e, "Failed to process pending job");
+                        }
+                    }
+                });
             }
 
             async fn on_channel_event(&self, channel: &str, event: &str, data: &str) {
-                debug!(
+                info!(
                     event,
                     channel,
                     data_len = data.len(),
                     "Received channel event"
                 );
 
-                if event == "PrintJobCreated" {
+                // Check for both formats: "PrintJobCreated" and ".PrintJobCreated"
+                if event == "PrintJobCreated" || event == ".PrintJobCreated" {
                     info!(channel, "Received print job event");
 
-                    // Parse the print job data
-                    match serde_json::from_str::<WebsocketPrintJob>(data) {
-                        Ok(print_job) => {
+                    // Parse the job ID from the WebSocket message
+                    // Format: {"model":{"id":20}}
+                    #[derive(serde::Deserialize)]
+                    struct WebsocketMessage {
+                        model: WebsocketModel,
+                    }
+                    #[derive(serde::Deserialize)]
+                    struct WebsocketModel {
+                        id: u32,
+                    }
+
+                    match serde_json::from_str::<WebsocketMessage>(data) {
+                        Ok(message) => {
+                            let job_id = message.model.id;
+                            info!(job_id, "Received print job creation event");
+
                             // Get references needed to handle the job
                             let client_clone = self.http_client.clone();
                             let config_clone = self.config.clone();
 
-                            // Spawn a new task to handle the print job
+                            // Spawn a new task to fetch and print the job
                             tokio::spawn(async move {
-                                // Get the original config by cloning
-                                let mut config_copy = {
+                                let config_copy = {
                                     let guard = config_clone.lock().unwrap();
                                     guard.clone()
                                 };
 
                                 if let Err(e) =
-                                    handle_print_job(print_job, &client_clone, &mut config_copy)
+                                    fetch_and_print_job_by_id(job_id, &client_clone, &config_copy)
                                         .await
                                 {
-                                    error!(error = %e, "Error handling print job");
+                                    error!(job_id, error = %e, "Error handling print job from WebSocket");
                                 } else {
-                                    info!("Successfully handled print job from WebSocket");
-                                }
-
-                                // Update the shared config with any token changes
-                                if let Ok(mut guard) = config_clone.lock() {
-                                    guard.flux_api_token = config_copy.flux_api_token;
+                                    info!(job_id, "Successfully handled print job from WebSocket");
                                 }
                             });
                         }
