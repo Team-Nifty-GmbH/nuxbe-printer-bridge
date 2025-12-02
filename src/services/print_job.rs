@@ -416,6 +416,12 @@ pub async fn fetch_and_print_job_by_id(
     println!("  Media ID: {}", job.media_id);
     println!("  Completed: {}", job.is_completed);
 
+    // Check if job is already completed
+    if job.is_completed {
+        println!("  Job was already printed. Skipping.");
+        return Ok(());
+    }
+
     // Get the CUPS printer name
     let printer_name = if let Some(ref printer) = job.printer {
         println!("  Printer: {} (spooler: {})", printer.name, printer.spooler_name);
