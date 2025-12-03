@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use actix_web::web;
 use printers::{get_printer_by_name, get_printers};
 use reqwest::Client;
 use tokio::time;
@@ -58,9 +57,9 @@ pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
 
 /// Check for new printers and update the stored printers
 pub async fn check_for_new_printers(
-    printers_data: web::Data<Arc<Mutex<HashSet<String>>>>,
-    http_client: web::Data<Client>,
-    config: web::Data<Arc<Mutex<Config>>>,
+    printers_data: Arc<Mutex<HashSet<String>>>,
+    http_client: &Client,
+    config: Arc<Mutex<Config>>,
     verbose_debug: bool,
 ) -> Result<Vec<Printer>, Box<dyn std::error::Error>> {
     let current_printers = get_all_printers(verbose_debug).await;
@@ -83,7 +82,7 @@ pub async fn check_for_new_printers(
     let sync_result = sync_printers_with_api(
         &current_printers_map,
         &saved_printers,
-        &http_client,
+        http_client,
         &config_clone,
         verbose_debug,
     )
@@ -127,17 +126,13 @@ pub async fn printer_checker_task(
     http_client: Client,
     verbose_debug: bool,
 ) {
-    let printers_data = web::Data::new(printers_data);
-    let config_data = web::Data::new(config.clone());
-    let client_data = web::Data::new(http_client);
-
     let interval = { config.lock().unwrap().printer_check_interval };
     info!("Starting printer sync (interval: {} minutes)", interval);
 
     match check_for_new_printers(
         printers_data.clone(),
-        client_data.clone(),
-        config_data.clone(),
+        &http_client,
+        config.clone(),
         verbose_debug,
     )
     .await
@@ -154,14 +149,14 @@ pub async fn printer_checker_task(
     }
 
     loop {
-        let interval = { config_data.lock().unwrap().printer_check_interval };
+        let interval = { config.lock().unwrap().printer_check_interval };
 
         time::sleep(Duration::from_secs(interval * 60)).await;
 
         match check_for_new_printers(
             printers_data.clone(),
-            client_data.clone(),
-            config_data.clone(),
+            &http_client,
+            config.clone(),
             verbose_debug,
         )
         .await

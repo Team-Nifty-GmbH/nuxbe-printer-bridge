@@ -52,23 +52,16 @@ pub fn build_env_filter(verbose: u8) -> EnvFilter {
     match verbose {
         0 => EnvFilter::from_default_env()
             .add_directive("reverb_rs=warn".parse().unwrap())
-            .add_directive("nuxbe_printer_bridge=info".parse().unwrap())
-            .add_directive("actix_http=warn".parse().unwrap()),
+            .add_directive("nuxbe_printer_bridge=info".parse().unwrap()),
         1 => EnvFilter::from_default_env()
             .add_directive("reverb_rs=info".parse().unwrap())
-            .add_directive("nuxbe_printer_bridge=info".parse().unwrap())
-            .add_directive("actix_http=info".parse().unwrap())
-            .add_directive("actix_web=info".parse().unwrap()),
+            .add_directive("nuxbe_printer_bridge=info".parse().unwrap()),
         2 => EnvFilter::from_default_env()
             .add_directive("reverb_rs=debug".parse().unwrap())
-            .add_directive("nuxbe_printer_bridge=debug".parse().unwrap())
-            .add_directive("actix_http=debug".parse().unwrap())
-            .add_directive("actix_web=debug".parse().unwrap()),
+            .add_directive("nuxbe_printer_bridge=debug".parse().unwrap()),
         _ => EnvFilter::from_default_env()
             .add_directive("reverb_rs=trace".parse().unwrap())
-            .add_directive("nuxbe_printer_bridge=trace".parse().unwrap())
-            .add_directive("actix_http=trace".parse().unwrap())
-            .add_directive("actix_web=trace".parse().unwrap()),
+            .add_directive("nuxbe_printer_bridge=trace".parse().unwrap()),
     }
 }
 

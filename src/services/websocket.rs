@@ -88,7 +88,12 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
                     };
 
                     // Fetch pending jobs and collect their IDs
-                    let job_ids: Vec<u32> = match crate::services::print_job::fetch_pending_job_ids(&client_clone, &config_copy).await {
+                    let job_ids: Vec<u32> = match crate::services::print_job::fetch_pending_job_ids(
+                        &client_clone,
+                        &config_copy,
+                    )
+                    .await
+                    {
                         Ok(ids) => ids,
                         Err(e) => {
                             error!(error = %e, "Failed to fetch pending print jobs");
@@ -101,14 +106,19 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
                         return;
                     }
 
-                    info!(count = job_ids.len(), "Found pending print jobs, processing...");
+                    info!(
+                        count = job_ids.len(),
+                        "Found pending print jobs, processing..."
+                    );
                     for job_id in job_ids {
                         info!(job_id, "Processing pending job");
                         if let Err(e) = crate::services::print_job::fetch_and_print_job_by_id(
                             job_id,
                             &client_clone,
                             &config_copy,
-                        ).await {
+                        )
+                        .await
+                        {
                             error!(job_id, error = %e, "Failed to process pending job");
                         }
                     }

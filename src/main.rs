@@ -13,7 +13,7 @@ use services::print_job::fetch_and_print_job_by_id;
 use utils::config::load_config;
 use utils::tui::run_tui;
 
-#[actix_web::main]
+#[tokio::main]
 async fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
 
