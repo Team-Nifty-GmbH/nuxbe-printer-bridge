@@ -1190,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "nuxbe-printer-bridge"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "async-trait",
  "clap",
@@ -1513,13 +1513,11 @@ dependencies = [
 [[package]]
 name = "reverb-rs"
 version = "0.1.0"
-source = "git+https://github.com/Team-Nifty-GmbH/reverb_rs?branch=main#4bd5e8747faac92278aba8524c4ff46c3722c295"
 dependencies = [
  "async-trait",
  "futures-util",
  "hex",
  "hmac",
- "log",
  "reqwest",
  "serde",
  "serde_json",

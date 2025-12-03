@@ -203,14 +203,18 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
         match client_arc.connect().await {
             Ok(_) => {
                 info!("Connected to Reverb successfully");
-                // Wait for a long time to keep the connection alive
-                tokio::time::sleep(Duration::from_secs(3600)).await;
+                // Wait until the connection is closed
+                client_arc.wait_for_disconnect().await;
+                info!("WebSocket connection lost");
             }
             Err(e) => {
                 error!(error = ?e, "Failed to connect to Reverb");
-                tokio::time::sleep(Duration::from_secs(30)).await;
             }
         }
+
+        // Wait before reconnecting
+        info!("Waiting 5 seconds before reconnecting...");
+        tokio::time::sleep(Duration::from_secs(5)).await;
 
         // If we reach here, we'll try to reconnect
         info!("Reconnecting to Reverb server");

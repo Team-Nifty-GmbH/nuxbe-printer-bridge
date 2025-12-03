@@ -1,6 +1,6 @@
 [package]
 name = "nuxbe-printer-bridge"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 
 [dependencies]
@@ -12,7 +12,7 @@ tempfile = "3.19"
 dirs = "6.0"
 clap = { version = "4.5", features = ["derive"] }
 cursive = { version = "0.21", default-features = false, features = ["crossterm-backend"] }
-reverb-rs = { git = "https://github.com/Team-Nifty-GmbH/reverb_rs", branch = "main" }
+reverb-rs = { path = "reverb-rs" }
 async-trait = "0.1.86"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "std"] }
 openssl-sys = { version = "0.9", features = ["vendored"] }
