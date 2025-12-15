@@ -1,13 +1,12 @@
 use crate::models::Config;
 use crate::services::print_job::fetch_and_print_job_by_id;
+use crate::utils::config::read_config;
 use async_trait::async_trait;
 use reqwest::Client;
 use reverb_rs::private_channel;
 use reverb_rs::{EventHandler, ReverbClient};
-use serde_json;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -16,12 +15,9 @@ pub async fn websocket_task(
     http_client: Client,
     cancel_token: CancellationToken,
 ) {
-    let disabled = {
-        let guard = config.read().expect("Failed to acquire config read lock");
-        guard.reverb_disabled
-    };
+    let config_snapshot = read_config(&config);
 
-    if disabled {
+    if config_snapshot.reverb_disabled {
         info!("WebSocket functionality is disabled. Not connecting to Reverb");
         return;
     }
@@ -32,20 +28,12 @@ pub async fn websocket_task(
             return;
         }
 
-        let app_key;
-        let app_secret;
-        let auth_endpoint;
-        let use_tls;
-        let host;
-
-        {
-            let config_guard = config.read().expect("Failed to acquire config read lock");
-            app_key = config_guard.reverb_app_key.clone();
-            app_secret = config_guard.reverb_app_secret.clone();
-            auth_endpoint = config_guard.reverb_auth_endpoint.clone();
-            use_tls = config_guard.reverb_use_tls;
-            host = config_guard.reverb_host.clone();
-        }
+        let config_snapshot = read_config(&config);
+        let app_key = config_snapshot.reverb_app_key;
+        let app_secret = config_snapshot.reverb_app_secret;
+        let auth_endpoint = config_snapshot.reverb_auth_endpoint;
+        let use_tls = config_snapshot.reverb_use_tls;
+        let host = config_snapshot.reverb_host;
 
         info!(app_key = %app_key, "Initializing Reverb client");
 
@@ -78,7 +66,7 @@ pub async fn websocket_task(
                 match self.client.subscribe(channel).await {
                     Ok(_) => info!(channel = %channel_name, "Subscribed to channel"),
                     Err(e) => {
-                        error!(channel = %channel_name, error = ?e, "Failed to subscribe to channel");
+                        error!(channel = %channel_name, error = %e, "Failed to subscribe to channel");
                     }
                 }
             }
@@ -89,14 +77,9 @@ pub async fn websocket_task(
                 // Fetch any pending jobs that were created while offline
                 info!("Fetching pending print jobs from API...");
                 let client_clone = self.http_client.clone();
-                let config_clone = self.config.clone();
+                let config_copy = read_config(&self.config);
 
                 tokio::spawn(async move {
-                    let config_copy = {
-                        let guard = config_clone.read().expect("Failed to acquire config read lock");
-                        guard.clone()
-                    };
-
                     // Fetch pending jobs and collect their IDs
                     let job_ids: Vec<u32> = match crate::services::print_job::fetch_pending_job_ids(
                         &client_clone,
@@ -165,15 +148,10 @@ pub async fn websocket_task(
 
                             // Get references needed to handle the job
                             let client_clone = self.http_client.clone();
-                            let config_clone = self.config.clone();
+                            let config_copy = read_config(&self.config);
 
                             // Spawn a new task to fetch and print the job
                             tokio::spawn(async move {
-                                let config_copy = {
-                                    let guard = config_clone.read().expect("Failed to acquire config read lock");
-                                    guard.clone()
-                                };
-
                                 if let Err(e) =
                                     fetch_and_print_job_by_id(job_id, &client_clone, &config_copy)
                                         .await
@@ -225,7 +203,7 @@ pub async fn websocket_task(
                 }
             }
             Err(e) => {
-                error!(error = ?e, "Failed to connect to Reverb");
+                error!(error = %e, "Failed to connect to Reverb");
             }
         }
 

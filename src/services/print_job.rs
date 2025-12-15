@@ -11,6 +11,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::SpoolerResult;
 use crate::models::{Config, PrintJob, PrintJobResponse};
+use crate::utils::config::read_config;
 use crate::utils::http::with_auth_header;
 
 /// Update print job status in the API
@@ -174,12 +175,8 @@ async fn process_print_job(
     let printer = match get_printer_by_name(&printer_name) {
         Some(p) => p,
         None => {
-            let printers = get_printers();
-            if printers.is_empty() {
-                error!(job_id = job.id, "No printers available");
-                return Err("No printers available".into());
-            }
-            let default_printer = printers.into_iter().next().unwrap();
+            let mut printers = get_printers();
+            let default_printer = printers.pop().ok_or("No printers available")?;
             warn!(
                 job_id = job.id,
                 requested_printer = %printer_name,
@@ -333,24 +330,14 @@ pub async fn job_checker_task(
     cancel_token: CancellationToken,
 ) {
     loop {
-        let reverb_enabled = {
-            let guard = config.read().expect("Failed to acquire config read lock");
-            !guard.reverb_disabled
-        };
+        let mut config_clone = read_config(&config);
 
-        if reverb_enabled {
+        if !config_clone.reverb_disabled {
             info!("Polling is disabled. Using Reverb WebSockets instead");
             return;
         }
 
-        let interval;
-        let mut config_clone;
-
-        {
-            let guard = config.read().expect("Failed to acquire config read lock");
-            interval = guard.job_check_interval;
-            config_clone = guard.clone();
-        }
+        let interval = config_clone.job_check_interval;
 
         match fetch_print_jobs(&http_client, &mut config_clone).await {
             Ok(jobs) => {

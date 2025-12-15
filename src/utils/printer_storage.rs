@@ -2,6 +2,7 @@ use crate::models::Printer;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use tracing::{debug, warn};
 
 /// Path to the printers JSON file
 pub fn printers_file_path() -> PathBuf {
@@ -19,11 +20,11 @@ pub fn load_printers() -> HashMap<String, Printer> {
 
     match fs::read_to_string(&path) {
         Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|e| {
-            eprintln!("Error parsing printers file: {}. Using empty list.", e);
+            warn!(error = %e, "Error parsing printers file, using empty list");
             HashMap::new()
         }),
         Err(_) => {
-            println!("Printers file not found. Starting with empty list.");
+            debug!("Printers file not found, starting with empty list");
             HashMap::new()
         }
     }
@@ -76,25 +77,22 @@ pub fn save_printers_if_changed(
 /// Save printers to JSON file
 pub fn save_printers(printers: &HashMap<String, Printer>) {
     let path = printers_file_path();
-
-    // Ensure the config directory exists
     let config_dir = crate::utils::config::config_dir();
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).expect("Failed to create config directory");
+
+    // create_dir_all is idempotent - no need to check existence first
+    if let Err(e) = fs::create_dir_all(&config_dir) {
+        warn!(error = %e, "Failed to create config directory");
+        return;
     }
 
     match serde_json::to_string_pretty(printers) {
         Ok(json) => {
             if let Err(e) = fs::write(&path, json) {
-                eprintln!("Failed to save printers file: {}", e);
+                warn!(error = %e, "Failed to save printers file");
             } else {
-                eprintln!(
-                    "Successfully saved {} printers to {}",
-                    printers.len(),
-                    path.display()
-                );
+                debug!(count = printers.len(), path = %path.display(), "Saved printers");
             }
         }
-        Err(e) => eprintln!("Failed to serialize printers: {}", e),
+        Err(e) => warn!(error = %e, "Failed to serialize printers"),
     }
 }

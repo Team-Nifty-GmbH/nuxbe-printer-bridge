@@ -1,5 +1,15 @@
 use crate::models::Config;
 use std::fs;
+use std::sync::{Arc, RwLock};
+use tracing::{debug, warn};
+
+/// Clone config from a shared RwLock
+pub fn read_config(config: &Arc<RwLock<Config>>) -> Config {
+    config
+        .read()
+        .expect("Failed to acquire config read lock")
+        .clone()
+}
 
 /// Path to the config directory
 pub fn config_dir() -> std::path::PathBuf {
@@ -17,26 +27,18 @@ pub fn load_config() -> Config {
     let config_dir = config_dir();
     let config_path = config_path();
 
-    // Create the directory if it doesn't exist
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).expect("Failed to create config directory");
-    }
+    // create_dir_all is idempotent - no need to check existence first
+    fs::create_dir_all(&config_dir).expect("Failed to create config directory");
 
     match fs::read_to_string(&config_path) {
-        Ok(contents) => {
-            serde_json::from_str(&contents).unwrap_or_else(|e| {
-                eprintln!(
-                    "Error parsing config file: {}. Using default configuration.",
-                    e
-                );
-                let default_config = Config::default();
-                // Save the default config
-                save_config(&default_config);
-                default_config
-            })
-        }
+        Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|e| {
+            warn!(error = %e, "Error parsing config file, using default configuration");
+            let default_config = Config::default();
+            save_config(&default_config);
+            default_config
+        }),
         Err(_) => {
-            println!("Config file not found. Creating with default values.");
+            debug!("Config file not found, creating with default values");
             let default_config = Config::default();
             save_config(&default_config);
             default_config
@@ -49,17 +51,18 @@ pub fn save_config(config: &Config) {
     let config_dir = config_dir();
     let config_path = config_path();
 
-    // Create the directory if it doesn't exist
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).expect("Failed to create config directory");
+    // create_dir_all is idempotent - no need to check existence first
+    if let Err(e) = fs::create_dir_all(&config_dir) {
+        warn!(error = %e, "Failed to create config directory");
+        return;
     }
 
     match serde_json::to_string_pretty(config) {
         Ok(json) => {
             if let Err(e) = fs::write(&config_path, json) {
-                eprintln!("Failed to save config file: {}", e);
+                warn!(error = %e, "Failed to save config file");
             }
         }
-        Err(e) => eprintln!("Failed to serialize config: {}", e),
+        Err(e) => warn!(error = %e, "Failed to serialize config"),
     }
 }

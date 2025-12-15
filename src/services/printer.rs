@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
+use std::mem;
 
 use printers::{get_printer_by_name, get_printers};
 use reqwest::Client;
@@ -9,14 +10,15 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace};
 
 use crate::error::SpoolerResult;
-use crate::models::{Config, Printer};
+use crate::models::Printer;
 use crate::services::printer_sync::sync_printers_with_api;
+use crate::utils::config::read_config;
 use crate::utils::printer_storage::{load_printers, save_printers_if_changed};
 
-/// Get all available printers from the CUPS system
-pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
+/// Get all available printers from the CUPS system (blocking operation)
+fn get_all_printers_blocking(verbose_debug: bool) -> Vec<Printer> {
     let system_printers = get_printers();
-    let mut printers = Vec::new();
+    let mut printers = Vec::with_capacity(system_printers.len());
 
     if verbose_debug {
         debug!(count = system_printers.len(), "Found system printers");
@@ -43,8 +45,8 @@ pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
                 .as_ref()
                 .map(|p| p.driver_name.clone())
                 .unwrap_or_else(|| system_printer.driver_name.clone()),
-            media_sizes: Vec::new(), // The printers crate doesn't provide media_sizes, we'll need to get this separately if needed
-            printer_id: None,        // IDs will be populated from saved printers later
+            media_sizes: Vec::new(),
+            printer_id: None,
         };
 
         printers.push(printer);
@@ -57,30 +59,35 @@ pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
     printers
 }
 
+/// Get all available printers from the CUPS system
+pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
+    tokio::task::spawn_blocking(move || get_all_printers_blocking(verbose_debug))
+        .await
+        .unwrap_or_default()
+}
+
 /// Check for new printers and update the stored printers
 pub async fn check_for_new_printers(
     printers_data: Arc<Mutex<HashSet<String>>>,
     http_client: &Client,
-    config: Arc<RwLock<Config>>,
+    config: &Arc<RwLock<crate::models::Config>>,
     verbose_debug: bool,
 ) -> SpoolerResult<Vec<Printer>> {
     let current_printers = get_all_printers(verbose_debug).await;
     let saved_printers = load_printers();
-    let mut current_printers_map: HashMap<String, Printer> = HashMap::new();
-    for printer in current_printers {
-        let mut updated_printer = printer.clone();
+    let mut current_printers_map: HashMap<String, Printer> =
+        HashMap::with_capacity(current_printers.len());
 
+    for mut printer in current_printers {
         if let Some(saved_printer) = saved_printers.get(&printer.name) {
-            updated_printer.printer_id = saved_printer.printer_id;
+            printer.printer_id = saved_printer.printer_id;
         }
-
-        current_printers_map.insert(printer.name.clone(), updated_printer);
+        let name = mem::take(&mut printer.name);
+        printer.name = name.clone();
+        current_printers_map.insert(name, printer);
     }
 
-    let config_clone = {
-        let guard = config.read().expect("Failed to acquire config read lock");
-        guard.clone()
-    };
+    let config_clone = read_config(config);
     let sync_result = sync_printers_with_api(
         &current_printers_map,
         &saved_printers,
@@ -135,22 +142,16 @@ fn log_new_printers(printers: &[Printer], context: &str) {
 /// Background task to periodically check for new printers
 pub async fn printer_checker_task(
     printers_data: Arc<Mutex<HashSet<String>>>,
-    config: Arc<RwLock<Config>>,
+    config: Arc<RwLock<crate::models::Config>>,
     http_client: Client,
     cancel_token: CancellationToken,
     verbose_debug: bool,
 ) {
-    let interval = { config.read().expect("Failed to acquire config read lock").printer_check_interval };
+    let interval = read_config(&config).printer_check_interval;
     info!("Starting printer sync (interval: {} minutes)", interval);
 
     // Initial check at startup
-    match check_for_new_printers(
-        printers_data.clone(),
-        &http_client,
-        config.clone(),
-        verbose_debug,
-    )
-    .await
+    match check_for_new_printers(printers_data.clone(), &http_client, &config, verbose_debug).await
     {
         Ok(new_printers) => log_new_printers(&new_printers, " at startup"),
         Err(e) => error!(error = %e, "Error checking for new printers at startup"),
@@ -158,7 +159,7 @@ pub async fn printer_checker_task(
 
     // Periodic checks
     loop {
-        let interval = { config.read().expect("Failed to acquire config read lock").printer_check_interval };
+        let interval = read_config(&config).printer_check_interval;
 
         tokio::select! {
             _ = cancel_token.cancelled() => {
@@ -172,13 +173,8 @@ pub async fn printer_checker_task(
             return;
         }
 
-        match check_for_new_printers(
-            printers_data.clone(),
-            &http_client,
-            config.clone(),
-            verbose_debug,
-        )
-        .await
+        match check_for_new_printers(printers_data.clone(), &http_client, &config, verbose_debug)
+            .await
         {
             Ok(new_printers) => log_new_printers(&new_printers, ""),
             Err(e) => error!(error = %e, "Error checking for new printers"),

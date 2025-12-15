@@ -89,12 +89,14 @@ pub fn print_local_file(
             }
         }
     } else {
-        let printers = get_printers();
-        if printers.is_empty() {
-            eprintln!("Error: No printers available");
-            std::process::exit(1);
+        let mut printers = get_printers();
+        match printers.pop() {
+            Some(p) => p,
+            None => {
+                eprintln!("Error: No printers available");
+                std::process::exit(1);
+            }
         }
-        printers.into_iter().next().unwrap()
     };
 
     let job_name_str = job_name.unwrap_or("CLI Print Job");

@@ -1,5 +1,5 @@
 use reqwest::{Client, StatusCode};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tracing::{debug, error, info, trace};
 
 use crate::error::SpoolerResult;
@@ -76,32 +76,31 @@ pub async fn sync_printers_with_api(
     }
 
     // 4. Find removed printers (in saved_printers but not in local_printers)
-    let local_printer_names: HashSet<String> = local_printers.keys().cloned().collect();
-    let saved_printer_names: HashSet<String> = saved_printers.keys().cloned().collect();
+    // Iterate directly instead of creating intermediate HashSets
+    for (name, printer) in saved_printers {
+        // Skip if printer exists in local_printers
+        if local_printers.contains_key(name) {
+            continue;
+        }
 
-    let removed_printers: Vec<&String> = saved_printer_names
-        .difference(&local_printer_names)
-        .collect();
+        let Some(id) = printer.printer_id else {
+            continue;
+        };
 
-    for name in removed_printers {
-        if let Some(printer) = saved_printers.get(name)
-            && let Some(id) = printer.printer_id
-        {
-            // Delete from API
-            match delete_printer_from_api(id, http_client, config, verbose_debug).await {
-                Ok(_) => {
-                    if verbose_debug {
-                        debug!(printer = %name, id, "Deleted printer from API");
-                    }
+        // Delete from API
+        match delete_printer_from_api(id, http_client, config, verbose_debug).await {
+            Ok(_) => {
+                if verbose_debug {
+                    debug!(printer = %name, id, "Deleted printer from API");
                 }
-                Err(e) => {
-                    error!(
-                        printer = %name,
-                        id,
-                        error = %e,
-                        "Failed to delete printer from API"
-                    );
-                }
+            }
+            Err(e) => {
+                error!(
+                    printer = %name,
+                    id,
+                    error = %e,
+                    "Failed to delete printer from API"
+                );
             }
         }
     }
