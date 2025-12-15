@@ -1,6 +1,7 @@
 use clap::Parser;
 
 mod cli;
+mod error;
 mod models;
 mod server;
 mod services;

@@ -2,6 +2,7 @@ use reqwest::{Client, StatusCode};
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, error, info, trace};
 
+use crate::error::SpoolerResult;
 use crate::models::api::{ApiPrinter, ApiPrinterResponse};
 use crate::models::{Config, Printer};
 use crate::utils::http::with_auth_header;
@@ -13,7 +14,7 @@ pub async fn sync_printers_with_api(
     http_client: &Client,
     config: &Config,
     verbose_debug: bool,
-) -> Result<HashMap<String, Printer>, Box<dyn std::error::Error>> {
+) -> SpoolerResult<HashMap<String, Printer>> {
     info!(
         local_count = local_printers.len(),
         saved_count = saved_printers.len(),
@@ -138,7 +139,7 @@ async fn fetch_printers_from_api(
     http_client: &Client,
     config: &Config,
     verbose_debug: bool,
-) -> Result<Vec<ApiPrinter>, Box<dyn std::error::Error>> {
+) -> SpoolerResult<Vec<ApiPrinter>> {
     // Fetch active printers for this instance (spooler_name = instance_name)
     let api_url = format!(
         "{}/api/printers?filter[is_active]=true&filter[spooler_name]={}",
@@ -179,7 +180,7 @@ async fn create_printer_in_api(
     http_client: &Client,
     config: &Config,
     verbose_debug: bool,
-) -> Result<Printer, Box<dyn std::error::Error>> {
+) -> SpoolerResult<Printer> {
     let api_url = format!("{}/api/printers", config.flux_url);
 
     // Convert to ApiPrinter
@@ -227,7 +228,7 @@ async fn update_printer_in_api(
     http_client: &Client,
     config: &Config,
     verbose_debug: bool,
-) -> Result<Printer, Box<dyn std::error::Error>> {
+) -> SpoolerResult<Printer> {
     if printer.printer_id.is_none() {
         return Err("Cannot update printer without an ID".into());
     }
@@ -272,7 +273,7 @@ async fn delete_printer_from_api(
     http_client: &Client,
     config: &Config,
     verbose_debug: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> SpoolerResult<()> {
     let api_url = format!("{}/api/printers/{}", config.flux_url, printer_id);
 
     let response = with_auth_header(http_client.delete(&api_url), config)

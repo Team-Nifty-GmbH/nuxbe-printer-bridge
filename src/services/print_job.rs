@@ -2,21 +2,24 @@ use printers::common::base::job::PrinterJobOptions;
 use printers::{get_printer_by_name, get_printers};
 use reqwest::Client;
 use std::io::Write;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio::time;
-use tracing::{debug, error, info};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
+use crate::error::SpoolerResult;
 use crate::models::{Config, PrintJob, PrintJobResponse};
 use crate::utils::http::with_auth_header;
 
+/// Update print job status in the API
 async fn update_print_job_status(
     job_id: u32,
     is_completed: bool,
     http_client: &Client,
     config: &Config,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> SpoolerResult<()> {
     let url = format!("{}/api/print-jobs", config.flux_url);
 
     let response = with_auth_header(http_client.put(&url), config)
@@ -29,7 +32,7 @@ async fn update_print_job_status(
         .await?;
 
     if !response.status().is_success() {
-        let status = response.status(); // Save the status before consuming the response
+        let status = response.status();
         let error_text = response.text().await?;
         return Err(format!(
             "Failed to update print job status: {} - {}",
@@ -76,18 +79,153 @@ pub async fn fetch_pending_job_ids(
         Err(e) => return Err(format!("Failed to parse print jobs: {}", e)),
     };
 
-    // Return just the IDs
     Ok(parsed_response.data.data.iter().map(|job| job.id).collect())
+}
+
+/// Get printer name by ID from saved printers, with fallback to default
+async fn get_printer_name_by_id(printer_id: Option<u32>) -> String {
+    let Some(id) = printer_id else {
+        return get_default_printer_name();
+    };
+
+    let saved_printers = crate::utils::printer_storage::load_printers();
+    for (name, printer) in saved_printers {
+        if printer.printer_id == Some(id) {
+            return name;
+        }
+    }
+
+    get_default_printer_name()
+}
+
+/// Get the default system printer name
+fn get_default_printer_name() -> String {
+    let system_printers = get_printers();
+    if let Some(first) = system_printers.first() {
+        return first.name.clone();
+    }
+    "default".to_string()
+}
+
+/// Resolve printer name from job data
+async fn resolve_printer_name(job: &PrintJob) -> String {
+    if let Some(ref printer) = job.printer {
+        debug!(
+            job_id = job.id,
+            printer_name = %printer.name,
+            spooler_name = %printer.spooler_name,
+            "Using printer from job data"
+        );
+        printer.name.clone()
+    } else {
+        debug!(
+            job_id = job.id,
+            printer_id = ?job.printer_id,
+            "Looking up printer by ID"
+        );
+        get_printer_name_by_id(job.printer_id).await
+    }
+}
+
+
+/// Download file from API and save to temp file
+async fn download_file(
+    http_client: &Client,
+    config: &Config,
+    media_id: u32,
+) -> SpoolerResult<NamedTempFile> {
+    let file_url = format!("{}/api/media/private/{}", config.flux_url, media_id);
+    debug!(media_id, "Downloading file");
+
+    let file_response = with_auth_header(http_client.get(&file_url), config)
+        .header("Accept", "application/octet-stream")
+        .send()
+        .await?;
+
+    if !file_response.status().is_success() {
+        return Err(format!(
+            "Failed to download file for media ID {}: {}",
+            media_id,
+            file_response.status()
+        )
+        .into());
+    }
+
+    let file_content = file_response.bytes().await?;
+
+    let mut temp_file = NamedTempFile::new()?;
+    temp_file.write_all(&file_content)?;
+
+    Ok(temp_file)
+}
+
+/// Download, print, and update job status - core print workflow
+async fn process_print_job(
+    job: &PrintJob,
+    http_client: &Client,
+    config: &Config,
+) -> SpoolerResult<()> {
+    let printer_name = resolve_printer_name(job).await;
+
+    // Download file
+    let temp_file = download_file(http_client, config, job.media_id).await?;
+
+    // Get printer with fallback
+    let printer = match get_printer_by_name(&printer_name) {
+        Some(p) => p,
+        None => {
+            let printers = get_printers();
+            if printers.is_empty() {
+                error!(job_id = job.id, "No printers available");
+                return Err("No printers available".into());
+            }
+            let default_printer = printers.into_iter().next().unwrap();
+            warn!(
+                job_id = job.id,
+                requested_printer = %printer_name,
+                fallback_printer = %default_printer.name,
+                "Printer not found, using default"
+            );
+            default_printer
+        }
+    };
+
+    // Print file
+    let temp_path = temp_file
+        .path()
+        .to_str()
+        .ok_or("Invalid temp file path")?;
+
+    let job_options = PrinterJobOptions {
+        name: Some(&format!("Print Job {}", job.id)),
+        ..PrinterJobOptions::none()
+    };
+
+    let cups_job_id = printer
+        .print_file(temp_path, job_options)
+        .map_err(|e| format!("Failed to print: {}", e))?;
+
+    info!(
+        job_id = job.id,
+        cups_job_id,
+        printer = %printer.name,
+        "Print job submitted successfully"
+    );
+
+    // Update status
+    match update_print_job_status(job.id, true, http_client, config).await {
+        Ok(_) => info!(job_id = job.id, "Status updated to completed"),
+        Err(e) => warn!(job_id = job.id, error = %e, "Failed to update job status"),
+    }
+
+    Ok(())
 }
 
 /// Fetch print jobs from the API and process them
 pub async fn fetch_print_jobs(
     http_client: &Client,
     config: &mut Config,
-) -> Result<Vec<PrintJob>, Box<dyn std::error::Error>> {
-    // Include printer relationship to get printer details and filter by is_completed
-    // Note: We fetch all incomplete jobs and filter by printer locally since the printer
-    // might be matched by spooler_name (CUPS printer name)
+) -> SpoolerResult<Vec<PrintJob>> {
     let jobs_url = format!(
         "{}/api/print-jobs?filter[is_completed]=false&include=printer",
         config.flux_url
@@ -106,217 +244,28 @@ pub async fn fetch_print_jobs(
 
     let response_text = response.text().await?;
 
-    // Show full API response for debugging purposes
-    // println!("Full API response: {}", response_text);
-
-    // Try to parse as generic JSON first to see actual structure
-    // match serde_json::from_str::<serde_json::Value>(&response_text) {
-    //     Ok(json_value) => {
-    //         println!("Successfully parsed as generic JSON: {}",
-    //                  if json_value.is_object() { "object" }
-    //                  else if json_value.is_array() { "array" }
-    //                  else { "other" }
-    //         );
-    //     },
-    //     Err(e) => {
-    //         println!("Warning: Could not parse as generic JSON: {}", e);
-    //     }
-    // }
-
-    let parsed_response: PrintJobResponse = match serde_json::from_str(&response_text) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            error!(error = %e, "JSON parse error");
-            debug!(error = %e, "Error location");
-
-            // Try to provide more context about where the error occurred
-            if let Some(line_col) = e.to_string().find("at line") {
-                let error_context = &e.to_string()[line_col..];
-                debug!(context = %error_context, "Error context");
-
-                // Try to show the part of JSON where error occurred
-                if error_context.contains("line")
-                    && error_context.contains("column")
-                    && let Ok(err_line) = error_context
-                        .split_whitespace()
-                        .nth(2)
-                        .unwrap_or("0")
-                        .parse::<usize>()
-                    && let Ok(err_col) = error_context
-                        .split_whitespace()
-                        .nth(5)
-                        .unwrap_or("0")
-                        .parse::<usize>()
-                {
-                    let lines: Vec<&str> = response_text.lines().collect();
-                    if err_line <= lines.len() {
-                        let line = lines[err_line - 1];
-                        debug!(line, "Problematic line");
-                        if err_col <= line.len() {
-                            let marker = " ".repeat(err_col - 1) + "^";
-                            debug!(position = %marker, "Error position");
-                        }
-                    }
-                }
-            }
-
-            return Err(format!("Failed to parse API response: {}", e).into());
-        }
-    };
+    let parsed_response: PrintJobResponse = serde_json::from_str(&response_text)
+        .map_err(|e| {
+            error!(error = %e, "Failed to parse print jobs response");
+            format!("Failed to parse API response: {}", e)
+        })?;
 
     let jobs = parsed_response.data.data;
 
-    if !jobs.is_empty() {
-        info!(job_count = jobs.len(), "Processing print jobs");
-
-        for job in &jobs {
-            // Get the CUPS printer name from included printer data
-            // spooler_name = instance, printer.name = CUPS printer
-            let printer_name = if let Some(ref printer) = job.printer {
-                debug!(
-                    job_id = job.id,
-                    printer_name = %printer.name,
-                    spooler_name = %printer.spooler_name,
-                    "Processing print job with included printer"
-                );
-                printer.name.clone()
-            } else {
-                debug!(
-                    job_id = job.id,
-                    printer_id = ?job.printer_id,
-                    "Processing print job (no included printer, looking up by ID)"
-                );
-                get_printer_name_by_id(job.printer_id).await
-            };
-
-            let file_url = format!("{}/api/media/private/{}", config.flux_url, job.media_id);
-            let file_response = with_auth_header(http_client.get(&file_url), config)
-                .header("Accept", "application/octet-stream")
-                .send()
-                .await?;
-
-            if !file_response.status().is_success() {
-                error!(
-                    job_id = job.id,
-                    status = %file_response.status(),
-                    "Failed to download file for job"
-                );
-                continue;
-            }
-
-            let file_content = file_response.bytes().await?;
-
-            let mut temp_file = NamedTempFile::new()?;
-            temp_file.write_all(&file_content)?;
-            let temp_path = temp_file.path().to_str().unwrap();
-            match get_printer_by_name(&printer_name) {
-                Some(printer) => {
-                    let job_options = PrinterJobOptions {
-                        name: Some(&format!("Print Job {}", job.id)),
-                        ..PrinterJobOptions::none()
-                    };
-
-                    match printer.print_file(temp_path, job_options) {
-                        Ok(print_job_id) => {
-                            info!(
-                                job_id = job.id,
-                                cups_job_id = print_job_id,
-                                "Successfully printed job"
-                            );
-
-                            match update_print_job_status(job.id, true, http_client, config).await {
-                                Ok(_) => {
-                                    info!(job_id = job.id, "Updated print job status to completed")
-                                }
-                                Err(e) => {
-                                    error!(job_id = job.id, error = %e, "Failed to update print job status")
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!(job_id = job.id, error = %e, "Failed to print job");
-                        }
-                    }
-                }
-                None => {
-                    error!(
-                        printer = %printer_name,
-                        job_id = job.id,
-                        "Printer not found for job"
-                    );
-                }
-            }
-        }
-    } else {
+    if jobs.is_empty() {
         debug!("No print jobs found for this instance");
+        return Ok(jobs);
     }
+
+    info!(job_count = jobs.len(), "Processing print jobs");
+
+    for job in &jobs {
+        if let Err(e) = process_print_job(job, http_client, config).await {
+            error!(job_id = job.id, error = %e, "Failed to process print job");
+        }
+    }
+
     Ok(jobs)
-}
-
-async fn get_printer_name_by_id(printer_id: Option<u32>) -> String {
-    if printer_id.is_none() {
-        return get_default_printer_name().await;
-    }
-
-    let printer_id = printer_id.unwrap();
-    let saved_printers = crate::utils::printer_storage::load_printers();
-    for (name, printer) in saved_printers {
-        if let Some(id) = printer.printer_id
-            && id == printer_id
-        {
-            return name;
-        }
-    }
-
-    get_default_printer_name().await
-}
-
-/// Background task to periodically check for print jobs
-pub async fn job_checker_task(config: Arc<Mutex<Config>>, http_client: Client) {
-    loop {
-        let reverb_enabled = {
-            let guard = config.lock().unwrap();
-            !guard.reverb_disabled
-        };
-
-        if reverb_enabled {
-            info!("Polling is disabled. Using Reverb WebSockets instead");
-            return;
-        }
-
-        let interval;
-        let mut config_clone;
-
-        {
-            let guard = config.lock().unwrap();
-            interval = guard.job_check_interval;
-            config_clone = guard.clone();
-        }
-
-        match fetch_print_jobs(&http_client, &mut config_clone).await {
-            Ok(jobs) => {
-                if !jobs.is_empty() {
-                    info!(job_count = jobs.len(), "Processed print jobs");
-                }
-
-                if let Ok(mut guard) = config.lock() {
-                    guard.flux_api_token = config_clone.flux_api_token;
-                }
-            }
-            Err(e) => error!(error = %e, "Error fetching print jobs"),
-        }
-
-        time::sleep(Duration::from_secs(interval * 60)).await;
-    }
-}
-
-async fn get_default_printer_name() -> String {
-    let system_printers = get_printers();
-    if !system_printers.is_empty() {
-        return system_printers[0].name.clone();
-    }
-
-    "default".to_string()
 }
 
 /// Single print job response from API (when fetching by ID)
@@ -332,7 +281,7 @@ pub async fn fetch_and_print_job_by_id(
     job_id: u32,
     http_client: &Client,
     config: &Config,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> SpoolerResult<()> {
     let job_url = format!(
         "{}/api/print-jobs/{}?include=printer",
         config.flux_url, job_id
@@ -361,92 +310,67 @@ pub async fn fetch_and_print_job_by_id(
 
     let job = parsed.data;
 
-    println!("Print Job #{}", job.id);
-    println!("  Media ID: {}", job.media_id);
-    println!("  Completed: {}", job.is_completed);
+    info!(
+        job_id = job.id,
+        media_id = job.media_id,
+        is_completed = job.is_completed,
+        "Fetched print job"
+    );
 
     // Check if job is already completed
     if job.is_completed {
-        println!("  Job was already printed. Skipping.");
+        info!(job_id = job.id, "Job was already printed, skipping");
         return Ok(());
     }
 
-    // Get the CUPS printer name
-    let printer_name = if let Some(ref printer) = job.printer {
-        println!(
-            "  Printer: {} (spooler: {})",
-            printer.name, printer.spooler_name
-        );
-        printer.name.clone()
-    } else {
-        let name = get_printer_name_by_id(job.printer_id).await;
-        println!("  Printer: {}", name);
-        name
-    };
+    process_print_job(&job, http_client, config).await
+}
 
-    // Download the file
-    let file_url = format!("{}/api/media/private/{}", config.flux_url, job.media_id);
-    println!("  Downloading file...");
+/// Background task to periodically check for print jobs
+pub async fn job_checker_task(
+    config: Arc<RwLock<Config>>,
+    http_client: Client,
+    cancel_token: CancellationToken,
+) {
+    loop {
+        let reverb_enabled = {
+            let guard = config.read().expect("Failed to acquire config read lock");
+            !guard.reverb_disabled
+        };
 
-    let file_response = with_auth_header(http_client.get(&file_url), config)
-        .header("Accept", "application/octet-stream")
-        .send()
-        .await?;
-
-    if !file_response.status().is_success() {
-        return Err(format!(
-            "Failed to download file for media ID {}: {}",
-            job.media_id,
-            file_response.status()
-        )
-        .into());
-    }
-
-    let file_content = file_response.bytes().await?;
-
-    // Write to temp file and print
-    let mut temp_file = NamedTempFile::new()?;
-    temp_file.write_all(&file_content)?;
-    let temp_path = temp_file.path().to_str().unwrap();
-
-    // Try to find the specified printer, or fall back to default
-    let printer = match get_printer_by_name(&printer_name) {
-        Some(p) => p,
-        None => {
-            // Printer not found, try to use default printer
-            let printers = get_printers();
-            if printers.is_empty() {
-                eprintln!("Error: No printers available");
-                return Err("No printers available".into());
-            }
-            let default_printer = printers.into_iter().next().unwrap();
-            eprintln!(
-                "  Warning: Printer '{}' not found, using default: {}",
-                printer_name, default_printer.name
-            );
-            default_printer
+        if reverb_enabled {
+            info!("Polling is disabled. Using Reverb WebSockets instead");
+            return;
         }
-    };
 
-    let job_options = PrinterJobOptions {
-        name: Some(&format!("Print Job {}", job.id)),
-        ..PrinterJobOptions::none()
-    };
+        let interval;
+        let mut config_clone;
 
-    match printer.print_file(temp_path, job_options) {
-        Ok(cups_job_id) => {
-            println!("  Print job submitted successfully!");
-            println!("  Printer: {}", printer.name);
-            println!("  CUPS Job ID: {}", cups_job_id);
-
-            // Update job status to completed
-            match update_print_job_status(job.id, true, http_client, config).await {
-                Ok(_) => println!("  Status updated to completed"),
-                Err(e) => eprintln!("  Warning: Failed to update job status: {}", e),
-            }
-
-            Ok(())
+        {
+            let guard = config.read().expect("Failed to acquire config read lock");
+            interval = guard.job_check_interval;
+            config_clone = guard.clone();
         }
-        Err(e) => Err(format!("Failed to print: {}", e).into()),
+
+        match fetch_print_jobs(&http_client, &mut config_clone).await {
+            Ok(jobs) => {
+                if !jobs.is_empty() {
+                    info!(job_count = jobs.len(), "Processed print jobs");
+                }
+
+                if let Ok(mut guard) = config.write() {
+                    guard.flux_api_token = config_clone.flux_api_token;
+                }
+            }
+            Err(e) => error!(error = %e, "Error fetching print jobs"),
+        }
+
+        tokio::select! {
+            _ = cancel_token.cancelled() => {
+                info!("Job checker task shutting down");
+                return;
+            }
+            _ = time::sleep(Duration::from_secs(interval * 60)) => {}
+        }
     }
 }

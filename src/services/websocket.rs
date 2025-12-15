@@ -5,14 +5,19 @@ use reqwest::Client;
 use reverb_rs::private_channel;
 use reverb_rs::{EventHandler, ReverbClient};
 use serde_json;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
+pub async fn websocket_task(
+    config: Arc<RwLock<Config>>,
+    http_client: Client,
+    cancel_token: CancellationToken,
+) {
     let disabled = {
-        let guard = config.lock().unwrap();
+        let guard = config.read().expect("Failed to acquire config read lock");
         guard.reverb_disabled
     };
 
@@ -22,6 +27,11 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
     }
 
     loop {
+        if cancel_token.is_cancelled() {
+            info!("WebSocket task shutting down");
+            return;
+        }
+
         let app_key;
         let app_secret;
         let auth_endpoint;
@@ -29,7 +39,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
         let host;
 
         {
-            let config_guard = config.lock().unwrap();
+            let config_guard = config.read().expect("Failed to acquire config read lock");
             app_key = config_guard.reverb_app_key.clone();
             app_secret = config_guard.reverb_app_secret.clone();
             auth_endpoint = config_guard.reverb_auth_endpoint.clone();
@@ -51,7 +61,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
         // Create a handler with cloned client for subscription
         struct PrintJobHandler {
             http_client: Client,
-            config: Arc<Mutex<Config>>,
+            config: Arc<RwLock<Config>>,
             client: Arc<ReverbClient>,
         }
 
@@ -83,7 +93,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
 
                 tokio::spawn(async move {
                     let config_copy = {
-                        let guard = config_clone.lock().unwrap();
+                        let guard = config_clone.read().expect("Failed to acquire config read lock");
                         guard.clone()
                     };
 
@@ -160,7 +170,7 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
                             // Spawn a new task to fetch and print the job
                             tokio::spawn(async move {
                                 let config_copy = {
-                                    let guard = config_clone.lock().unwrap();
+                                    let guard = config_clone.read().expect("Failed to acquire config read lock");
                                     guard.clone()
                                 };
 
@@ -203,18 +213,37 @@ pub async fn websocket_task(config: Arc<Mutex<Config>>, http_client: Client) {
         match client_arc.connect().await {
             Ok(_) => {
                 info!("Connected to Reverb successfully");
-                // Wait until the connection is closed
-                client_arc.wait_for_disconnect().await;
-                info!("WebSocket connection lost");
+                // Wait until the connection is closed or cancellation
+                tokio::select! {
+                    _ = cancel_token.cancelled() => {
+                        info!("WebSocket task received shutdown signal");
+                        return;
+                    }
+                    _ = client_arc.wait_for_disconnect() => {
+                        info!("WebSocket connection lost");
+                    }
+                }
             }
             Err(e) => {
                 error!(error = ?e, "Failed to connect to Reverb");
             }
         }
 
+        // Check for cancellation before reconnecting
+        if cancel_token.is_cancelled() {
+            info!("WebSocket task shutting down");
+            return;
+        }
+
         // Wait before reconnecting
         info!("Waiting 5 seconds before reconnecting...");
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        tokio::select! {
+            _ = cancel_token.cancelled() => {
+                info!("WebSocket task shutting down");
+                return;
+            }
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+        }
 
         // If we reach here, we'll try to reconnect
         info!("Reconnecting to Reverb server");
