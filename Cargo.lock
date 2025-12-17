@@ -1190,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "nuxbe-printer-bridge"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "async-trait",
  "clap",
