@@ -26,36 +26,42 @@ pub async fn sync_printers_with_api(
 
     let api_printers = fetch_printers_from_api(http_client, config, verbose_debug).await?;
     info!(api_count = api_printers.len(), "Fetched printers from API");
-    // Filter by spooler_name (instance name) and map by printer name
+    // Filter by spooler_name (instance name) and map by system_name for stable identification
     let mut api_printer_map = HashMap::new();
     for api_printer in api_printers {
         // Only include printers that belong to this instance
         if api_printer.spooler_name == config.instance_name {
-            api_printer_map.insert(api_printer.name.clone(), api_printer);
+            // Use system_name as the key, falling back to name if system_name is not set
+            let key = api_printer
+                .system_name
+                .clone()
+                .unwrap_or_else(|| api_printer.name.clone());
+            api_printer_map.insert(key, api_printer);
         }
     }
 
-    for (name, printer) in &mut updated_printers {
-        // Match by printer name (for printers belonging to this instance)
-        if let Some(api_printer) = api_printer_map.get(name) {
+    for (system_name, printer) in &mut updated_printers {
+        // Match by system_name for stable printer identification
+        if let Some(api_printer) = api_printer_map.get(system_name) {
             printer.printer_id = api_printer.id;
             if verbose_debug {
                 trace!(
-                    printer = %name,
+                    printer = %printer.name,
+                    system_name = %system_name,
                     spooler_name = %api_printer.spooler_name,
                     id = api_printer.id.unwrap_or(0),
                     "Found existing printer in API"
                 );
             }
-        } else if let Some(saved_printer) = saved_printers.get(name) {
+        } else if let Some(saved_printer) = saved_printers.get(system_name) {
             printer.printer_id = saved_printer.printer_id;
         }
     }
 
-    for (name, printer) in updated_printers.iter_mut() {
+    for (_system_name, printer) in updated_printers.iter_mut() {
         if printer.printer_id.is_none() {
             if verbose_debug {
-                debug!(printer = %name, "Creating new printer in API");
+                debug!(printer = %printer.name, "Creating new printer in API");
             }
             match create_printer_in_api(printer, http_client, config, verbose_debug).await {
                 Ok(new_printer) => {
@@ -69,7 +75,7 @@ pub async fn sync_printers_with_api(
                     *printer = new_printer.clone();
                 }
                 Err(e) => {
-                    error!(printer = %name, error = %e, "Failed to create printer in API");
+                    error!(printer = %printer.name, error = %e, "Failed to create printer in API");
                 }
             }
         }
@@ -77,9 +83,9 @@ pub async fn sync_printers_with_api(
 
     // 4. Find removed printers (in saved_printers but not in local_printers)
     // Iterate directly instead of creating intermediate HashSets
-    for (name, printer) in saved_printers {
+    for (system_name, printer) in saved_printers {
         // Skip if printer exists in local_printers
-        if local_printers.contains_key(name) {
+        if local_printers.contains_key(system_name) {
             continue;
         }
 
@@ -91,12 +97,12 @@ pub async fn sync_printers_with_api(
         match delete_printer_from_api(id, http_client, config, verbose_debug).await {
             Ok(_) => {
                 if verbose_debug {
-                    debug!(printer = %name, id, "Deleted printer from API");
+                    debug!(printer = %printer.name, id, "Deleted printer from API");
                 }
             }
             Err(e) => {
                 error!(
-                    printer = %name,
+                    printer = %printer.name,
                     id,
                     error = %e,
                     "Failed to delete printer from API"
@@ -106,23 +112,23 @@ pub async fn sync_printers_with_api(
     }
 
     // 5. Update changed printers
-    for (name, local_printer) in local_printers {
-        if let Some(saved_printer) = saved_printers.get(name) {
+    for (system_name, local_printer) in local_printers {
+        if let Some(saved_printer) = saved_printers.get(system_name) {
             // Check if printer exists in both and has an ID
             if saved_printer.printer_id.is_some() && *local_printer != *saved_printer {
                 // Get the updated printer from our map
-                if let Some(printer) = updated_printers.get_mut(name) {
+                if let Some(printer) = updated_printers.get_mut(system_name) {
                     if verbose_debug {
-                        debug!(printer = %name, "Updating printer in API");
+                        debug!(printer = %printer.name, "Updating printer in API");
                     }
                     match update_printer_in_api(printer, http_client, config, verbose_debug).await {
                         Ok(_) => {
                             if verbose_debug {
-                                debug!(printer = %name, "Updated printer in API");
+                                debug!(printer = %printer.name, "Updated printer in API");
                             }
                         }
                         Err(e) => {
-                            error!(printer = %name, error = %e, "Failed to update printer in API");
+                            error!(printer = %printer.name, error = %e, "Failed to update printer in API");
                         }
                     }
                 }
@@ -283,14 +289,22 @@ async fn delete_printer_from_api(
         .send()
         .await?;
 
+    if response.status() == StatusCode::NOT_FOUND {
+        // Printer already gone from API — treat as success
+        if verbose_debug {
+            debug!(id = printer_id, "Printer already deleted from API");
+        }
+        return Ok(());
+    }
+
     if !response.status().is_success() {
-        let status = response.status(); // Save the status before consuming the response
+        let status = response.status();
         let error_text = response.text().await?;
         return Err(format!("Failed to delete printer: {} - {}", status, error_text).into());
     }
 
     if verbose_debug {
-        debug!(id = printer_id, "Successfully deleted printer");
+        debug!(id = printer_id, "Successfully deleted printer from API");
     }
 
     Ok(())

@@ -1,8 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use std::mem;
-
 use printers::{get_printer_by_name, get_printers};
 use reqwest::Client;
 use tokio::time;
@@ -33,6 +31,8 @@ fn get_all_printers_blocking(verbose_debug: bool) -> Vec<Printer> {
 
         let printer = Printer {
             name: system_printer.name.clone(),
+            system_name: system_printer.system_name.clone(),
+            uri: Some(system_printer.uri.clone()),
             description: detailed_info
                 .as_ref()
                 .map(|p| p.description.clone())
@@ -79,12 +79,10 @@ pub async fn check_for_new_printers(
         HashMap::with_capacity(current_printers.len());
 
     for mut printer in current_printers {
-        if let Some(saved_printer) = saved_printers.get(&printer.name) {
+        if let Some(saved_printer) = saved_printers.get(&printer.system_name) {
             printer.printer_id = saved_printer.printer_id;
         }
-        let name = mem::take(&mut printer.name);
-        printer.name = name.clone();
-        current_printers_map.insert(name, printer);
+        current_printers_map.insert(printer.system_name.clone(), printer);
     }
 
     let config_clone = read_config(config);
@@ -121,7 +119,7 @@ pub async fn check_for_new_printers(
     }
     let new_printers: Vec<Printer> = updated_printers
         .values()
-        .filter(|p| !saved_printers.contains_key(&p.name))
+        .filter(|p| !saved_printers.contains_key(&p.system_name))
         .cloned()
         .collect();
 

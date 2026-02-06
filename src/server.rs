@@ -55,14 +55,14 @@ async fn initialize_printers(printers_set: &Arc<Mutex<HashSet<String>>>, verbose
     let mut updated_printers = original_saved_printers.clone();
 
     for printer in system_printers {
-        set.insert(printer.name.clone());
+        set.insert(printer.system_name.clone());
 
-        if let Some(saved_printer) = original_saved_printers.get(&printer.name) {
+        if let Some(saved_printer) = original_saved_printers.get(&printer.system_name) {
             let mut updated_printer = printer.clone();
             updated_printer.printer_id = saved_printer.printer_id;
-            updated_printers.insert(printer.name.clone(), updated_printer);
+            updated_printers.insert(printer.system_name.clone(), updated_printer);
         } else {
-            updated_printers.insert(printer.name.clone(), printer);
+            updated_printers.insert(printer.system_name.clone(), printer);
         }
     }
 

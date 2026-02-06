@@ -83,48 +83,45 @@ pub async fn fetch_pending_job_ids(
     Ok(parsed_response.data.data.iter().map(|job| job.id).collect())
 }
 
-/// Get printer name by ID from saved printers, with fallback to default
-async fn get_printer_name_by_id(printer_id: Option<u32>) -> String {
-    let Some(id) = printer_id else {
-        return get_default_printer_name();
-    };
-
-    let saved_printers = crate::utils::printer_storage::load_printers();
-    for (name, printer) in saved_printers {
-        if printer.printer_id == Some(id) {
-            return name;
-        }
-    }
-
-    get_default_printer_name()
-}
-
-/// Get the default system printer name
-fn get_default_printer_name() -> String {
+/// Get the default system printer system_name
+fn get_default_printer_system_name() -> String {
     let system_printers = get_printers();
     if let Some(first) = system_printers.first() {
-        return first.name.clone();
+        return first.system_name.clone();
     }
     "default".to_string()
 }
 
-/// Resolve printer name from job data
+/// Resolve printer system_name from job data for stable CUPS addressing
 async fn resolve_printer_name(job: &PrintJob) -> String {
+    // Try to resolve via saved printers by ID for stable system_name
+    let printer_id = job.printer.as_ref().map(|p| p.id).or(job.printer_id);
+    if let Some(id) = printer_id {
+        let saved_printers = crate::utils::printer_storage::load_printers();
+        for (system_name, printer) in &saved_printers {
+            if printer.printer_id == Some(id) {
+                debug!(
+                    job_id = job.id,
+                    printer_name = %printer.name,
+                    system_name = %system_name,
+                    "Resolved printer system_name"
+                );
+                return system_name.clone();
+            }
+        }
+    }
+
+    // Fallback: use name from job data (get_printer_by_name matches both name and system_name)
     if let Some(ref printer) = job.printer {
         debug!(
             job_id = job.id,
             printer_name = %printer.name,
-            spooler_name = %printer.spooler_name,
-            "Using printer from job data"
+            "Falling back to printer name from job data"
         );
         printer.name.clone()
     } else {
-        debug!(
-            job_id = job.id,
-            printer_id = ?job.printer_id,
-            "Looking up printer by ID"
-        );
-        get_printer_name_by_id(job.printer_id).await
+        debug!(job_id = job.id, "Using default printer");
+        get_default_printer_system_name()
     }
 }
 

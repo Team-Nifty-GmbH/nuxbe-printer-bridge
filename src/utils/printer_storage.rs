@@ -45,7 +45,9 @@ pub fn printers_have_changed(
         match saved.get(name) {
             Some(saved_printer) => {
                 // Compare all relevant fields
-                if current_printer.description != saved_printer.description
+                if current_printer.system_name != saved_printer.system_name
+                    || current_printer.uri != saved_printer.uri
+                    || current_printer.description != saved_printer.description
                     || current_printer.location != saved_printer.location
                     || current_printer.make_and_model != saved_printer.make_and_model
                     || current_printer.media_sizes != saved_printer.media_sizes

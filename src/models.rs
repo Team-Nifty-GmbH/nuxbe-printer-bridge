@@ -43,6 +43,8 @@ impl Default for Config {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Printer {
     pub name: String,
+    pub system_name: String,
+    pub uri: Option<String>,
     pub description: String,
     pub location: String,
     pub make_and_model: String,
