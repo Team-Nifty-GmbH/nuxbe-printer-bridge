@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ApiPrinter {
@@ -36,6 +37,10 @@ impl From<&crate::models::Printer> for ApiPrinter {
             location: Some(printer.location.clone()),
             make_and_model: Some(printer.make_and_model.clone()),
             media_sizes: if printer.media_sizes.is_empty() {
+                warn!(
+                    printer = %printer.name,
+                    "No media sizes from CUPS, falling back to [\"A4\"]"
+                );
                 vec!["A4".to_string()]
             } else {
                 printer.media_sizes.clone()
@@ -50,7 +55,10 @@ impl From<&ApiPrinter> for crate::models::Printer {
     fn from(api_printer: &ApiPrinter) -> Self {
         crate::models::Printer {
             name: api_printer.name.clone(),
-            system_name: api_printer.system_name.clone().unwrap_or_else(|| api_printer.name.clone()),
+            system_name: api_printer
+                .system_name
+                .clone()
+                .unwrap_or_else(|| api_printer.name.clone()),
             uri: api_printer.uri.clone(),
             description: "".to_string(), // No longer used in API
             location: api_printer.location.clone().unwrap_or_default(),

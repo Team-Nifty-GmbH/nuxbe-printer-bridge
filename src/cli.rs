@@ -114,7 +114,7 @@ pub fn print_local_file(
             true
         }
         Err(e) => {
-            eprintln!("Error: Failed to print file: {}", e);
+            eprintln!("Error: Failed to print file: {:?}", e);
             std::process::exit(1);
         }
     }

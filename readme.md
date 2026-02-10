@@ -20,8 +20,10 @@ sudo apt install nuxbe-printer-bridge
 
 - **Printer Management**:
   - Automatic discovery of local CUPS printers
-  - Synchronization of printers with Nuxbe ERP API
-  - Real-time printer updates and status tracking
+  - Media size (paper format) detection via `lpoptions` for each printer
+  - Synchronization of printers with Nuxbe ERP API using stable `system_name` identification
+  - Two-pass matching: by `system_name` first, then by display `name` for legacy printers
+  - Automatic URI, media size, and system name propagation to the ERP
 
 - **Print Job Processing**:
   - Real-time print job notifications via Laravel Reverb WebSocket
@@ -31,20 +33,21 @@ sudo apt install nuxbe-printer-bridge
 
 - **CLI Printing**:
   - Print local files directly from command line
+  - Fetch and print jobs from the API by ID
   - List available printers
   - Custom job names
 
 - **Configuration Options**:
-  - Simple text-based configuration interface
+  - TUI-based configuration editor
   - Flexible WebSocket and polling configurations
-  - Customizable update intervals
+  - Customizable check intervals for printers and jobs
 
 ## Requirements
 
-- Rust 2024 edition or newer
 - CUPS installed and configured
 - Network connection to Nuxbe ERP instance
 - Laravel Reverb for WebSocket functionality (optional)
+- Rust 2024 edition (only for building from source)
 
 ## Installation
 
@@ -91,13 +94,17 @@ nuxbe-printer-bridge config
 
 The configuration is stored in `~/.config/nuxbe-printer-bridge/config.json` and includes:
 
-- `instance_name`: Unique identifier for this print server
+- `instance_name`: Unique identifier for this print server (used as `spooler_name` in the API)
 - `printer_check_interval`: How often to check for printer changes (minutes)
 - `job_check_interval`: How often to check for print jobs (minutes)
-- `nuxbe_url`: Base URL for the Nuxbe ERP API
-- `nuxbe_api_token`: Authentication token for the API
+- `flux_url`: Base URL for the Nuxbe ERP API
+- `flux_api_token`: Sanctum Bearer token for API authentication
+- `api_port`: Local API port (default: 8080)
 - `reverb_disabled`: Whether to disable WebSocket and use polling instead
-- `reverb_*` settings: Configuration for Laravel Reverb WebSocket connection
+- `reverb_app_id`, `reverb_app_key`, `reverb_app_secret`: Laravel Reverb credentials
+- `reverb_use_tls`: Whether to use WSS (secure WebSocket)
+- `reverb_host`: Reverb server hostname
+- `reverb_auth_endpoint`: Broadcasting auth URL
 
 ## Usage
 
@@ -152,24 +159,28 @@ nuxbe-printer-bridge config
 
 The application follows this order for printer synchronization:
 
-1. Check for printers via CUPS
-2. Load saved printers from printer.json
-3. Create new printers in the API with POST requests to `/api/printers`
-4. Get updated printer list with IDs from the API via GET to `/api/printers`
-5. Delete removed printers from the API with DELETE to `/api/printers/{printer_id}`
-6. Update changed printers in the API with PUT to `/api/printers/{printer_id}`
+1. Discover local CUPS printers and query supported media sizes via `lpoptions -p <name> -l`
+2. Load saved printers from `printers.json`
+3. Fetch API printers filtered by `spooler_name` (the configured `instance_name`)
+4. Match local printers to API printers using two-pass matching:
+   - **Pass 1**: Match by `system_name` (stable CUPS identifier)
+   - **Pass 2**: Fall back to matching by display `name` for legacy printers where `system_name` is null
+5. Create new printers in the API (POST `/api/printers`)
+6. Delete removed printers from the API (DELETE `/api/printers/{id}`)
+7. Update changed printers in the API (PUT `/api/printers` with ID in body), including legacy-matched printers that need `system_name`, `uri`, and `media_sizes` populated
 
-All API requests include the `instance_name` in the request body when required.
+All API requests include the `instance_name` as `spooler_name` in the request body.
 
 ### Print Job Flow
 
 For print jobs, the application:
 
-1. Receives job notifications via WebSocket or polling
+1. Receives job notifications via WebSocket (`PrintJobCreated` event) or periodic polling
 2. On WebSocket connect, fetches any pending jobs created while offline
-3. Downloads the file to be printed using the media ID
-4. Prints the file on the appropriate printer (falls back to default if specified printer not found)
-5. Updates the job status to `is_completed = true` via PUT to `/api/print-jobs`
+3. Fetches full job details from the API (GET `/api/print-jobs/{id}?include=printer`)
+4. Downloads the document via media ID (GET `/api/media/private/{media_id}`)
+5. Prints the file on the appropriate CUPS printer (falls back to default if specified printer not found)
+6. Marks the job as completed (PUT `/api/print-jobs` with ID in body, `is_completed: true`)
 
 ### Setting up as a System Service (Linux)
 

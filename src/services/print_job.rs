@@ -197,7 +197,7 @@ async fn process_print_job(
 
     let cups_job_id = printer
         .print_file(temp_path, job_options)
-        .map_err(|e| format!("Failed to print: {}", e))?;
+        .map_err(|e| format!("Failed to print: {:?}", e))?;
 
     info!(
         job_id = job.id,

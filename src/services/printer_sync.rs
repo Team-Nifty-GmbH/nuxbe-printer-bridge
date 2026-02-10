@@ -1,5 +1,6 @@
+use std::collections::{HashMap, HashSet};
+
 use reqwest::{Client, StatusCode};
-use std::collections::HashMap;
 use tracing::{debug, error, info, trace};
 
 use crate::error::SpoolerResult;
@@ -26,34 +27,52 @@ pub async fn sync_printers_with_api(
 
     let api_printers = fetch_printers_from_api(http_client, config, verbose_debug).await?;
     info!(api_count = api_printers.len(), "Fetched printers from API");
-    // Filter by spooler_name (instance name) and map by system_name for stable identification
-    let mut api_printer_map = HashMap::new();
+
+    // Split API printers into two maps for matching:
+    // 1. Printers WITH system_name -- keyed by system_name (stable identification)
+    // 2. Legacy printers WITHOUT system_name -- keyed by display name (fallback match)
+    let mut api_by_system_name: HashMap<String, ApiPrinter> = HashMap::new();
+    let mut api_by_name: HashMap<String, ApiPrinter> = HashMap::new();
     for api_printer in api_printers {
-        // Only include printers that belong to this instance
-        if api_printer.spooler_name == config.instance_name {
-            // Use system_name as the key, falling back to name if system_name is not set
-            let key = api_printer
-                .system_name
-                .clone()
-                .unwrap_or_else(|| api_printer.name.clone());
-            api_printer_map.insert(key, api_printer);
+        if api_printer.spooler_name != config.instance_name {
+            continue;
+        }
+        if let Some(ref sys_name) = api_printer.system_name {
+            api_by_system_name.insert(sys_name.clone(), api_printer);
+        } else {
+            api_by_name.insert(api_printer.name.clone(), api_printer);
         }
     }
 
+    // Track printers matched via name fallback so we can force-update them with system_name/uri
+    let mut legacy_matched: HashSet<String> = HashSet::new();
+
     for (system_name, printer) in &mut updated_printers {
-        // Match by system_name for stable printer identification
-        if let Some(api_printer) = api_printer_map.get(system_name) {
+        // Pass 1: Match by system_name (stable identification)
+        if let Some(api_printer) = api_by_system_name.get(system_name) {
             printer.printer_id = api_printer.id;
             if verbose_debug {
                 trace!(
                     printer = %printer.name,
                     system_name = %system_name,
-                    spooler_name = %api_printer.spooler_name,
                     id = api_printer.id.unwrap_or(0),
-                    "Found existing printer in API"
+                    "Found existing printer in API by system_name"
                 );
             }
-        } else if let Some(saved_printer) = saved_printers.get(system_name) {
+        }
+        // Pass 2: Fallback match by display name for legacy printers (system_name is null in API)
+        else if let Some(api_printer) = api_by_name.get(&printer.name) {
+            printer.printer_id = api_printer.id;
+            legacy_matched.insert(system_name.clone());
+            info!(
+                printer = %printer.name,
+                system_name = %system_name,
+                id = api_printer.id.unwrap_or(0),
+                "Matched legacy printer by name, will update with system_name and uri"
+            );
+        }
+        // Pass 3: Fall back to saved printer_id
+        else if let Some(saved_printer) = saved_printers.get(system_name) {
             printer.printer_id = saved_printer.printer_id;
         }
     }
@@ -111,26 +130,36 @@ pub async fn sync_printers_with_api(
         }
     }
 
-    // 5. Update changed printers
+    // 5. Update changed printers (including legacy-matched ones that need system_name/uri)
     for (system_name, local_printer) in local_printers {
-        if let Some(saved_printer) = saved_printers.get(system_name) {
-            // Check if printer exists in both and has an ID
-            if saved_printer.printer_id.is_some() && *local_printer != *saved_printer {
-                // Get the updated printer from our map
-                if let Some(printer) = updated_printers.get_mut(system_name) {
-                    if verbose_debug {
-                        debug!(printer = %printer.name, "Updating printer in API");
+        let needs_update = if let Some(saved_printer) = saved_printers.get(system_name) {
+            saved_printer.printer_id.is_some() && *local_printer != *saved_printer
+        } else {
+            false
+        };
+
+        // Also force update for legacy-matched printers missing system_name/uri in API
+        let is_legacy = legacy_matched.contains(system_name);
+
+        if (needs_update || is_legacy)
+            && let Some(printer) = updated_printers.get_mut(system_name)
+            && printer.printer_id.is_some()
+        {
+            if verbose_debug || is_legacy {
+                debug!(
+                    printer = %printer.name,
+                    is_legacy,
+                    "Updating printer in API"
+                );
+            }
+            match update_printer_in_api(printer, http_client, config, verbose_debug).await {
+                Ok(_) => {
+                    if verbose_debug || is_legacy {
+                        debug!(printer = %printer.name, "Updated printer in API");
                     }
-                    match update_printer_in_api(printer, http_client, config, verbose_debug).await {
-                        Ok(_) => {
-                            if verbose_debug {
-                                debug!(printer = %printer.name, "Updated printer in API");
-                            }
-                        }
-                        Err(e) => {
-                            error!(printer = %printer.name, error = %e, "Failed to update printer in API");
-                        }
-                    }
+                }
+                Err(e) => {
+                    error!(printer = %printer.name, error = %e, "Failed to update printer in API");
                 }
             }
         }
