@@ -163,9 +163,9 @@ The application follows this order for printer synchronization:
 2. Load saved printers from `printers.json`
 3. Fetch API printers filtered by `spooler_name` (the configured `instance_name`)
 4. Match local printers to API printers using two-pass matching:
-   - **Pass 1**: Match by `system_name` (stable CUPS identifier)
+   - **Pass 1**: Match by `system_name` (stable CUPS identifier), also trying with the mDNS `@hostname.local` suffix stripped to avoid duplicates from CUPS implicit-class printers
    - **Pass 2**: Fall back to matching by display `name` for legacy printers where `system_name` is null
-5. Create new printers in the API (POST `/api/printers`)
+5. Create new printers in the API with `is_visible: true` (POST `/api/printers`)
 6. Delete removed printers from the API (DELETE `/api/printers/{id}`)
 7. Update changed printers in the API (PUT `/api/printers` with ID in body), including legacy-matched printers that need `system_name`, `uri`, and `media_sizes` populated
 
