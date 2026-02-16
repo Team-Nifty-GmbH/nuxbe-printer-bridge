@@ -64,16 +64,14 @@ pub async fn sync_printers_with_api(
         // Pass 1: Match by system_name (stable identification)
         // Also try stripping the mDNS `@hostname.local` suffix so that e.g.
         // `EPSON_AM_C5000_Series@EPSONFFD7A7.local` matches `EPSON_AM_C5000_Series`
-        let api_match = api_by_system_name
-            .get(system_name.as_str())
-            .or_else(|| {
-                let base = strip_mdns_suffix(system_name);
-                if base != system_name {
-                    api_by_system_name.get(base)
-                } else {
-                    None
-                }
-            });
+        let api_match = api_by_system_name.get(system_name.as_str()).or_else(|| {
+            let base = strip_mdns_suffix(system_name);
+            if base != system_name {
+                api_by_system_name.get(base)
+            } else {
+                None
+            }
+        });
 
         if let Some(api_printer) = api_match {
             printer.printer_id = api_printer.id;

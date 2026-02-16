@@ -173,7 +173,9 @@ pub async fn check_for_new_printers(
     }
 
     {
-        let mut printers_set = printers_data.lock().expect("Failed to acquire printers_data lock");
+        let mut printers_set = printers_data
+            .lock()
+            .expect("Failed to acquire printers_data lock");
         printers_set.clear();
         for printer in updated_printers.keys() {
             printers_set.insert(printer.clone());

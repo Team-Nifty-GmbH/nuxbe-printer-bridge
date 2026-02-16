@@ -26,7 +26,10 @@ pub fn run_tui() {
 /// Create the main configuration dialog
 fn create_config_dialog(siv: &mut Cursive, config: Arc<Mutex<Config>>) {
     // Clone the config to use in the UI
-    let current_config = config.lock().expect("Failed to acquire config lock").clone();
+    let current_config = config
+        .lock()
+        .expect("Failed to acquire config lock")
+        .clone();
 
     let server_settings = create_server_settings(&current_config);
     let interval_settings = create_interval_settings(&current_config);
@@ -195,7 +198,9 @@ fn create_reverb_settings(config: &Config) -> impl View {
 /// Save configuration from UI values
 fn save_config_from_ui(s: &mut Cursive, config: Arc<Mutex<Config>>) {
     // Get a mutable reference to the config
-    let mut config_guard = config.lock().expect("Failed to acquire config lock for saving");
+    let mut config_guard = config
+        .lock()
+        .expect("Failed to acquire config lock for saving");
 
     config_guard.instance_name = s
         .call_on_name("instance_name", |view: &mut EditView| {
