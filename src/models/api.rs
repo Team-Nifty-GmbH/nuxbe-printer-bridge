@@ -12,6 +12,7 @@ pub struct ApiPrinter {
     pub make_and_model: Option<String>,
     pub media_sizes: Vec<String>, // Changed from Option<Vec<String>>
     pub is_active: Option<bool>,
+    pub is_visible: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -46,6 +47,7 @@ impl From<&crate::models::Printer> for ApiPrinter {
                 printer.media_sizes.clone()
             },
             is_active: Some(true),
+            is_visible: Some(true),
         }
     }
 }

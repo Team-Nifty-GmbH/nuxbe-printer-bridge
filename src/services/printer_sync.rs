@@ -8,6 +8,19 @@ use crate::models::api::{ApiPrinter, ApiPrinterResponse};
 use crate::models::{Config, Printer};
 use crate::utils::http::with_auth_header;
 
+/// Strip mDNS/Bonjour suffix from a CUPS system name.
+///
+/// CUPS may discover the same physical printer twice: once directly (e.g.
+/// `EPSON_AM_C5000_Series`) and once via mDNS with an `@hostname.local` suffix
+/// (e.g. `EPSON_AM_C5000_Series@EPSONFFD7A7.local`). This helper returns the
+/// base name so we can match both variants to the same API printer.
+fn strip_mdns_suffix(name: &str) -> &str {
+    match name.find('@') {
+        Some(pos) => &name[..pos],
+        None => name,
+    }
+}
+
 /// Synchronize printers with the API server following the specified order
 pub async fn sync_printers_with_api(
     local_printers: &HashMap<String, Printer>,
@@ -49,7 +62,20 @@ pub async fn sync_printers_with_api(
 
     for (system_name, printer) in &mut updated_printers {
         // Pass 1: Match by system_name (stable identification)
-        if let Some(api_printer) = api_by_system_name.get(system_name) {
+        // Also try stripping the mDNS `@hostname.local` suffix so that e.g.
+        // `EPSON_AM_C5000_Series@EPSONFFD7A7.local` matches `EPSON_AM_C5000_Series`
+        let api_match = api_by_system_name
+            .get(system_name.as_str())
+            .or_else(|| {
+                let base = strip_mdns_suffix(system_name);
+                if base != system_name {
+                    api_by_system_name.get(base)
+                } else {
+                    None
+                }
+            });
+
+        if let Some(api_printer) = api_match {
             printer.printer_id = api_printer.id;
             if verbose_debug {
                 trace!(
