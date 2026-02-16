@@ -1,6 +1,54 @@
+use std::fmt;
+
+use printers::common::base::job::PrinterJobState;
 use serde::{Deserialize, Serialize};
 
 pub mod api;
+
+/// Status of a print job as tracked by the bridge.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PrintJobStatus {
+    Queued,
+    Processing,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl fmt::Display for PrintJobStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PrintJobStatus::Queued => write!(f, "queued"),
+            PrintJobStatus::Processing => write!(f, "processing"),
+            PrintJobStatus::Completed => write!(f, "completed"),
+            PrintJobStatus::Failed => write!(f, "failed"),
+            PrintJobStatus::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
+impl From<PrinterJobState> for PrintJobStatus {
+    fn from(state: PrinterJobState) -> Self {
+        match state {
+            PrinterJobState::PENDING | PrinterJobState::PAUSED => PrintJobStatus::Queued,
+            PrinterJobState::PROCESSING => PrintJobStatus::Processing,
+            PrinterJobState::COMPLETED => PrintJobStatus::Completed,
+            PrinterJobState::CANCELLED => PrintJobStatus::Cancelled,
+            PrinterJobState::UNKNOWN => PrintJobStatus::Failed,
+        }
+    }
+}
+
+impl PrintJobStatus {
+    /// Whether this status represents a terminal state (no further transitions).
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            PrintJobStatus::Completed | PrintJobStatus::Failed | PrintJobStatus::Cancelled
+        )
+    }
+}
 
 /// Configuration structure for the application
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -91,6 +139,10 @@ pub struct PrintJob {
     pub quantity: u32,
     pub size: String,
     pub is_completed: bool,
+    pub cups_job_id: Option<u32>,
+    pub status: Option<PrintJobStatus>,
+    pub error_message: Option<String>,
+    pub printed_at: Option<String>,
     pub created_at: String,
     pub created_by: Option<u32>,
     pub updated_at: String,

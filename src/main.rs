@@ -10,7 +10,7 @@ mod utils;
 
 use cli::{Cli, Commands, build_env_filter, list_printers, print_local_file};
 use server::run_server;
-use services::print_job::fetch_and_print_job_by_id;
+use services::print_job::{fetch_and_print_job_by_id, new_in_flight_jobs};
 use utils::config::load_config;
 use utils::tui::run_tui;
 
@@ -44,7 +44,10 @@ async fn main() -> std::io::Result<()> {
                 }
 
                 let http_client = reqwest::Client::new();
-                match fetch_and_print_job_by_id(job_id, &http_client, &config).await {
+                let in_flight_jobs = new_in_flight_jobs();
+                match fetch_and_print_job_by_id(job_id, &http_client, &config, &in_flight_jobs)
+                    .await
+                {
                     Ok(_) => {}
                     Err(e) => {
                         eprintln!("Error: {}", e);

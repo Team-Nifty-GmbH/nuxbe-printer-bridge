@@ -1,19 +1,22 @@
-use crate::models::Config;
-use crate::services::print_job::fetch_and_print_job_by_id;
-use crate::utils::config::read_config;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+
 use async_trait::async_trait;
 use reqwest::Client;
 use reverb_rs::private_channel;
 use reverb_rs::{EventHandler, ReverbClient};
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
+
+use crate::models::Config;
+use crate::services::print_job::{InFlightJobs, fetch_and_print_job_by_id};
+use crate::utils::config::read_config;
 
 pub async fn websocket_task(
     config: Arc<RwLock<Config>>,
     http_client: Client,
     cancel_token: CancellationToken,
+    in_flight_jobs: InFlightJobs,
 ) {
     let config_snapshot = read_config(&config);
 
@@ -51,6 +54,7 @@ pub async fn websocket_task(
             http_client: Client,
             config: Arc<RwLock<Config>>,
             client: Arc<ReverbClient>,
+            in_flight_jobs: InFlightJobs,
         }
 
         #[async_trait]
@@ -78,6 +82,7 @@ pub async fn websocket_task(
                 info!("Fetching pending print jobs from API...");
                 let client_clone = self.http_client.clone();
                 let config_copy = read_config(&self.config);
+                let in_flight_clone = self.in_flight_jobs.clone();
 
                 tokio::spawn(async move {
                     // Fetch pending jobs and collect their IDs
@@ -109,6 +114,7 @@ pub async fn websocket_task(
                             job_id,
                             &client_clone,
                             &config_copy,
+                            &in_flight_clone,
                         )
                         .await
                         {
@@ -149,12 +155,17 @@ pub async fn websocket_task(
                             // Get references needed to handle the job
                             let client_clone = self.http_client.clone();
                             let config_copy = read_config(&self.config);
+                            let in_flight_clone = self.in_flight_jobs.clone();
 
                             // Spawn a new task to fetch and print the job
                             tokio::spawn(async move {
-                                if let Err(e) =
-                                    fetch_and_print_job_by_id(job_id, &client_clone, &config_copy)
-                                        .await
+                                if let Err(e) = fetch_and_print_job_by_id(
+                                    job_id,
+                                    &client_clone,
+                                    &config_copy,
+                                    &in_flight_clone,
+                                )
+                                .await
                                 {
                                     error!(job_id, error = %e, "Error handling print job from WebSocket");
                                 } else {
@@ -182,6 +193,7 @@ pub async fn websocket_task(
             http_client: http_client.clone(),
             config: config.clone(),
             client: client_arc.clone(),
+            in_flight_jobs: in_flight_jobs.clone(),
         };
 
         // Add the event handler and connect

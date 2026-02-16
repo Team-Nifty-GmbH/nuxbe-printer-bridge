@@ -6,7 +6,9 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::services::print_job::job_checker_task;
+use crate::services::print_job::{
+    InFlightJobs, job_checker_task, job_status_checker_task, new_in_flight_jobs,
+};
 use crate::services::printer::{get_all_printers, printer_checker_task};
 use crate::services::websocket::websocket_task;
 use crate::utils::config::load_config;
@@ -18,6 +20,7 @@ pub async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
     let http_client = Client::new();
     let printers_set = Arc::new(Mutex::new(HashSet::new()));
     let cancel_token = CancellationToken::new();
+    let in_flight_jobs = new_in_flight_jobs();
 
     initialize_printers(&printers_set, verbose_debug).await;
     let handles = spawn_background_tasks(
@@ -25,6 +28,7 @@ pub async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
         &http_client,
         &printers_set,
         &cancel_token,
+        &in_flight_jobs,
         verbose_debug,
     );
 
@@ -49,7 +53,9 @@ pub async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
 /// Initialize printers from system and sync with saved state
 async fn initialize_printers(printers_set: &Arc<Mutex<HashSet<String>>>, verbose_debug: bool) {
     let system_printers = get_all_printers(verbose_debug).await;
-    let mut set = printers_set.lock().expect("Failed to acquire printers_set lock");
+    let mut set = printers_set
+        .lock()
+        .expect("Failed to acquire printers_set lock");
 
     let original_saved_printers = load_printers();
     let mut updated_printers = original_saved_printers.clone();
@@ -82,6 +88,7 @@ fn spawn_background_tasks(
     http_client: &Client,
     printers_set: &Arc<Mutex<HashSet<String>>>,
     cancel_token: &CancellationToken,
+    in_flight_jobs: &InFlightJobs,
     verbose_debug: bool,
 ) -> Vec<JoinHandle<()>> {
     let mut handles = Vec::new();
@@ -107,18 +114,42 @@ fn spawn_background_tasks(
     let config_jobs = config.clone();
     let http_client_jobs = http_client.clone();
     let token_jobs = cancel_token.clone();
+    let in_flight_jobs_polling = in_flight_jobs.clone();
 
     handles.push(tokio::spawn(async move {
-        job_checker_task(config_jobs, http_client_jobs, token_jobs).await;
+        job_checker_task(
+            config_jobs,
+            http_client_jobs,
+            token_jobs,
+            in_flight_jobs_polling,
+        )
+        .await;
     }));
 
     // WebSocket listener task
     let config_ws = config.clone();
     let http_client_ws = http_client.clone();
     let token_ws = cancel_token.clone();
+    let in_flight_jobs_ws = in_flight_jobs.clone();
 
     handles.push(tokio::spawn(async move {
-        websocket_task(config_ws, http_client_ws, token_ws).await;
+        websocket_task(config_ws, http_client_ws, token_ws, in_flight_jobs_ws).await;
+    }));
+
+    // Job status checker task (polls CUPS for final job status)
+    let config_status = config.clone();
+    let http_client_status = http_client.clone();
+    let token_status = cancel_token.clone();
+    let in_flight_jobs_status = in_flight_jobs.clone();
+
+    handles.push(tokio::spawn(async move {
+        job_status_checker_task(
+            config_status,
+            http_client_status,
+            token_status,
+            in_flight_jobs_status,
+        )
+        .await;
     }));
 
     handles
