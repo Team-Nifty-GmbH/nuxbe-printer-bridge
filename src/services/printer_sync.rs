@@ -29,6 +29,15 @@ pub async fn sync_printers_with_api(
     config: &Config,
     verbose_debug: bool,
 ) -> SpoolerResult<HashMap<String, Printer>> {
+    // Filter out any mDNS implicit-class printers that slipped through discovery.
+    // These have an '@' in the system_name (e.g. "Printer@hostname.local") and are
+    // CUPS shadows that cannot be printed to directly.
+    let local_printers: HashMap<String, Printer> = local_printers
+        .iter()
+        .filter(|(system_name, _)| !system_name.contains('@'))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
     info!(
         local_count = local_printers.len(),
         saved_count = saved_printers.len(),
@@ -155,7 +164,7 @@ pub async fn sync_printers_with_api(
     }
 
     // 5. Update changed printers (including legacy-matched ones that need system_name/uri)
-    for (system_name, local_printer) in local_printers {
+    for (system_name, local_printer) in &local_printers {
         let needs_update = if let Some(saved_printer) = saved_printers.get(system_name) {
             saved_printer.printer_id.is_some() && *local_printer != *saved_printer
         } else {

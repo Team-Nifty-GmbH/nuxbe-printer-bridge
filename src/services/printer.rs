@@ -7,7 +7,7 @@ use printers::{get_printer_by_name, get_printers};
 use reqwest::Client;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::error::SpoolerResult;
 use crate::models::Printer;
@@ -84,17 +84,42 @@ fn get_all_printers_blocking(verbose_debug: bool) -> Vec<Printer> {
     }
 
     for system_printer in system_printers {
+        // Skip mDNS implicit-class duplicates (e.g. "Printer@hostname.local").
+        // These are CUPS-discovered shadows of real printers with implicitclass:// URIs
+        // that cannot be printed to directly.
+        if system_printer.system_name.contains('@') {
+            debug!(
+                printer = %system_printer.name,
+                system_name = %system_printer.system_name,
+                "Skipping mDNS implicit-class duplicate"
+            );
+            continue;
+        }
+
         if verbose_debug {
             trace!(printer = %system_printer.name, "Processing printer");
         }
 
         let detailed_info = get_printer_by_name(&system_printer.name);
-        let media_sizes = query_media_sizes(&system_printer.name, verbose_debug);
+        // Use system_name for lpoptions query (CUPS expects the queue name, not display name)
+        let media_sizes = query_media_sizes(&system_printer.system_name, verbose_debug);
+
+        if media_sizes.is_empty() {
+            warn!(
+                printer = %system_printer.name,
+                system_name = %system_printer.system_name,
+                "No media sizes returned from CUPS, printer may not be fully configured"
+            );
+        }
 
         let printer = Printer {
             name: system_printer.name.clone(),
             system_name: system_printer.system_name.clone(),
-            uri: Some(system_printer.uri.clone()),
+            uri: if system_printer.uri.is_empty() {
+                None
+            } else {
+                Some(system_printer.uri.clone())
+            },
             description: detailed_info
                 .as_ref()
                 .map(|p| p.description.clone())
