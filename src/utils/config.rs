@@ -1,14 +1,13 @@
 use crate::models::Config;
+use serde::Serialize;
 use std::fs;
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, warn};
 
 /// Clone config from a shared RwLock
 pub fn read_config(config: &Arc<RwLock<Config>>) -> Config {
-    config
-        .read()
-        .expect("Failed to acquire config read lock")
-        .clone()
+    crate::utils::sync::read(config).clone()
 }
 
 /// Path to the config directory
@@ -20,6 +19,24 @@ pub fn config_dir() -> std::path::PathBuf {
 /// Path to the config file
 fn config_path() -> std::path::PathBuf {
     config_dir().join("config.json")
+}
+
+/// Serialize a value as pretty JSON to a file inside the config directory,
+/// logging (not propagating) any failure.
+pub fn save_json<T: Serialize>(path: &Path, value: &T, what: &str) {
+    if let Err(e) = fs::create_dir_all(config_dir()) {
+        warn!(error = %e, "Failed to create config directory");
+        return;
+    }
+
+    match serde_json::to_string_pretty(value) {
+        Ok(json) => {
+            if let Err(e) = fs::write(path, json) {
+                warn!(error = %e, what, "Failed to save file");
+            }
+        }
+        Err(e) => warn!(error = %e, what, "Failed to serialize"),
+    }
 }
 
 /// Load configuration from file or create default if it doesn't exist
@@ -48,21 +65,5 @@ pub fn load_config() -> Config {
 
 /// Save configuration to file
 pub fn save_config(config: &Config) {
-    let config_dir = config_dir();
-    let config_path = config_path();
-
-    // create_dir_all is idempotent - no need to check existence first
-    if let Err(e) = fs::create_dir_all(&config_dir) {
-        warn!(error = %e, "Failed to create config directory");
-        return;
-    }
-
-    match serde_json::to_string_pretty(config) {
-        Ok(json) => {
-            if let Err(e) = fs::write(&config_path, json) {
-                warn!(error = %e, "Failed to save config file");
-            }
-        }
-        Err(e) => warn!(error = %e, "Failed to serialize config"),
-    }
+    save_json(&config_path(), config, "config");
 }

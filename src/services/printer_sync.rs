@@ -29,23 +29,30 @@ pub async fn sync_printers_with_api(
     config: &Config,
     verbose_debug: bool,
 ) -> SpoolerResult<HashMap<String, Printer>> {
-    // Filter out any mDNS implicit-class printers that slipped through discovery.
-    // These have an '@' in the system_name (e.g. "Printer@hostname.local") and are
-    // CUPS shadows that cannot be printed to directly.
-    let local_printers: HashMap<String, Printer> = local_printers
-        .iter()
-        .filter(|(system_name, _)| !system_name.contains('@'))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+    // Single working copy of the local printers. Discovery already filters
+    // mDNS implicit-class duplicates ('@' in system_name); the retain is a
+    // safety net since those CUPS shadows cannot be printed to directly.
+    let mut updated_printers = local_printers.clone();
+    updated_printers.retain(|system_name, _| !system_name.contains('@'));
 
     info!(
-        local_count = local_printers.len(),
+        local_count = updated_printers.len(),
         saved_count = saved_printers.len(),
         api_url = %config.flux_url,
         "Syncing printers with API"
     );
 
-    let mut updated_printers = local_printers.clone();
+    // Detect changed printers against the saved state now, before the sync
+    // passes below overwrite printer ids with values from the API.
+    let changed: HashSet<String> = updated_printers
+        .iter()
+        .filter(|(system_name, printer)| {
+            saved_printers
+                .get(*system_name)
+                .is_some_and(|saved| saved.printer_id.is_some() && *printer != saved)
+        })
+        .map(|(system_name, _)| system_name.clone())
+        .collect();
 
     let api_printers = fetch_printers_from_api(http_client, config, verbose_debug).await?;
     info!(api_count = api_printers.len(), "Fetched printers from API");
@@ -133,11 +140,9 @@ pub async fn sync_printers_with_api(
         }
     }
 
-    // 4. Find removed printers (in saved_printers but not in local_printers)
-    // Iterate directly instead of creating intermediate HashSets
+    // 4. Find removed printers (in saved_printers but no longer present locally)
     for (system_name, printer) in saved_printers {
-        // Skip if printer exists in local_printers
-        if local_printers.contains_key(system_name) {
+        if updated_printers.contains_key(system_name) {
             continue;
         }
 
@@ -164,18 +169,11 @@ pub async fn sync_printers_with_api(
     }
 
     // 5. Update changed printers (including legacy-matched ones that need system_name/uri)
-    for (system_name, local_printer) in &local_printers {
-        let needs_update = if let Some(saved_printer) = saved_printers.get(system_name) {
-            saved_printer.printer_id.is_some() && *local_printer != *saved_printer
-        } else {
-            false
-        };
-
-        // Also force update for legacy-matched printers missing system_name/uri in API
+    let to_update: HashSet<&String> = changed.iter().chain(legacy_matched.iter()).collect();
+    for system_name in to_update {
         let is_legacy = legacy_matched.contains(system_name);
 
-        if (needs_update || is_legacy)
-            && let Some(printer) = updated_printers.get_mut(system_name)
+        if let Some(printer) = updated_printers.get(system_name)
             && printer.printer_id.is_some()
         {
             if verbose_debug || is_legacy {
@@ -201,45 +199,59 @@ pub async fn sync_printers_with_api(
     Ok(updated_printers)
 }
 
-/// Fetch printers from the API
+/// Fetch printers from the API, following pagination so printers beyond the
+/// first page are not missed (which would cause duplicate CREATEs).
 async fn fetch_printers_from_api(
     http_client: &Client,
     config: &Config,
     verbose_debug: bool,
 ) -> SpoolerResult<Vec<ApiPrinter>> {
     // Fetch active printers for this instance (spooler_name = instance_name)
-    let api_url = format!(
+    let base_url = format!(
         "{}/api/printers?filter[is_active]=true&filter[spooler_name]={}",
         config.flux_url,
         urlencoding::encode(&config.instance_name)
     );
 
-    if verbose_debug {
-        trace!(url = %api_url, "Fetching printers from API");
+    let mut printers = Vec::new();
+    let mut page = 1u32;
+
+    loop {
+        let api_url = format!("{}&page={}", base_url, page);
+        if verbose_debug {
+            trace!(url = %api_url, "Fetching printers from API");
+        }
+
+        let response = with_auth_header(http_client.get(&api_url), config)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "Failed to fetch printers from API: {} - {}",
+                status, error_text
+            )
+            .into());
+        }
+
+        let response_text = response.text().await?;
+        if verbose_debug {
+            trace!(response = %response_text, "API response");
+        }
+
+        let parsed_response: ApiPrinterResponse = serde_json::from_str(&response_text)?;
+        let data = parsed_response.data;
+        printers.extend(data.data);
+
+        let current = data.current_page.unwrap_or(1);
+        if current >= data.last_page.unwrap_or(1) {
+            return Ok(printers);
+        }
+        page = current + 1;
     }
-
-    let response = with_auth_header(http_client.get(&api_url), config)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-        return Err(format!(
-            "Failed to fetch printers from API: {} - {}",
-            status, error_text
-        )
-        .into());
-    }
-
-    let response_text = response.text().await?;
-    if verbose_debug {
-        trace!(response = %response_text, "API response");
-    }
-
-    let parsed_response: ApiPrinterResponse = serde_json::from_str(&response_text)?;
-    Ok(parsed_response.data.data)
 }
 
 async fn create_printer_in_api(

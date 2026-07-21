@@ -2,7 +2,6 @@ use std::fmt;
 
 /// Custom error type for the print spooler application
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum SpoolerError {
     /// HTTP/API communication errors
     Api(String),
@@ -12,10 +11,6 @@ pub enum SpoolerError {
     Json(serde_json::Error),
     /// File I/O errors
     Io(std::io::Error),
-    /// Print-related errors
-    Print(String),
-    /// Configuration errors
-    Config(String),
 }
 
 impl fmt::Display for SpoolerError {
@@ -25,8 +20,6 @@ impl fmt::Display for SpoolerError {
             SpoolerError::Network(e) => write!(f, "Network error: {}", e),
             SpoolerError::Json(e) => write!(f, "JSON error: {}", e),
             SpoolerError::Io(e) => write!(f, "I/O error: {}", e),
-            SpoolerError::Print(msg) => write!(f, "Print error: {}", msg),
-            SpoolerError::Config(msg) => write!(f, "Configuration error: {}", msg),
         }
     }
 }

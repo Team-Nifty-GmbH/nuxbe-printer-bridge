@@ -1,9 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::process::Command;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use printers::{get_printer_by_name, get_printers};
+use printers::get_printers;
 use reqwest::Client;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -14,6 +14,15 @@ use crate::models::Printer;
 use crate::services::printer_sync::sync_printers_with_api;
 use crate::utils::config::read_config;
 use crate::utils::printer_storage::{load_printers, save_printers_if_changed};
+
+/// Shared cache of synced printers, keyed by CUPS system_name. Written by the
+/// printer checker task, read by the print workflow to resolve printer ids.
+pub type PrinterCache = Arc<RwLock<HashMap<String, Printer>>>;
+
+/// Create a new empty printer cache.
+pub fn new_printer_cache() -> PrinterCache {
+    Arc::new(RwLock::new(HashMap::new()))
+}
 
 /// Query CUPS for supported media sizes of a printer via `lpoptions -p <name> -l`
 fn query_media_sizes(printer_name: &str, verbose_debug: bool) -> Vec<String> {
@@ -76,74 +85,70 @@ fn query_media_sizes(printer_name: &str, verbose_debug: bool) -> Vec<String> {
 
 /// Get all available printers from the CUPS system (blocking operation)
 fn get_all_printers_blocking(verbose_debug: bool) -> Vec<Printer> {
-    let system_printers = get_printers();
-    let mut printers = Vec::with_capacity(system_printers.len());
+    // Skip mDNS implicit-class duplicates (e.g. "Printer@hostname.local").
+    // These are CUPS-discovered shadows of real printers with implicitclass://
+    // URIs that cannot be printed to directly.
+    let system_printers: Vec<_> = get_printers()
+        .into_iter()
+        .filter(|p| {
+            if p.system_name.contains('@') {
+                debug!(
+                    printer = %p.name,
+                    system_name = %p.system_name,
+                    "Skipping mDNS implicit-class duplicate"
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
 
     if verbose_debug {
         debug!(count = system_printers.len(), "Found system printers");
     }
 
-    for system_printer in system_printers {
-        // Skip mDNS implicit-class duplicates (e.g. "Printer@hostname.local").
-        // These are CUPS-discovered shadows of real printers with implicitclass:// URIs
-        // that cannot be printed to directly.
-        if system_printer.system_name.contains('@') {
-            debug!(
-                printer = %system_printer.name,
-                system_name = %system_printer.system_name,
-                "Skipping mDNS implicit-class duplicate"
-            );
-            continue;
-        }
+    // Query media sizes concurrently — one lpoptions subprocess per printer.
+    // CUPS expects the queue name (system_name), not the display name.
+    let media_sizes: Vec<Vec<String>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = system_printers
+            .iter()
+            .map(|p| scope.spawn(move || query_media_sizes(&p.system_name, verbose_debug)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_default())
+            .collect()
+    });
 
-        if verbose_debug {
-            trace!(printer = %system_printer.name, "Processing printer");
-        }
+    system_printers
+        .into_iter()
+        .zip(media_sizes)
+        .map(|(system_printer, media_sizes)| {
+            if media_sizes.is_empty() {
+                warn!(
+                    printer = %system_printer.name,
+                    system_name = %system_printer.system_name,
+                    "No media sizes returned from CUPS, printer may not be fully configured"
+                );
+            }
 
-        let detailed_info = get_printer_by_name(&system_printer.name);
-        // Use system_name for lpoptions query (CUPS expects the queue name, not display name)
-        let media_sizes = query_media_sizes(&system_printer.system_name, verbose_debug);
-
-        if media_sizes.is_empty() {
-            warn!(
-                printer = %system_printer.name,
-                system_name = %system_printer.system_name,
-                "No media sizes returned from CUPS, printer may not be fully configured"
-            );
-        }
-
-        let printer = Printer {
-            name: system_printer.name.clone(),
-            system_name: system_printer.system_name.clone(),
-            uri: if system_printer.uri.is_empty() {
-                None
-            } else {
-                Some(system_printer.uri.clone())
-            },
-            description: detailed_info
-                .as_ref()
-                .map(|p| p.description.clone())
-                .unwrap_or_else(|| system_printer.description.clone()),
-            location: detailed_info
-                .as_ref()
-                .map(|p| p.location.clone())
-                .unwrap_or_else(|| system_printer.location.clone()),
-            make_and_model: detailed_info
-                .as_ref()
-                .map(|p| p.driver_name.clone())
-                .unwrap_or_else(|| system_printer.driver_name.clone()),
-            media_sizes,
-            printer_id: None,
-        };
-
-        printers.push(printer);
-    }
-
-    if verbose_debug {
-        debug!(count = printers.len(), "Successfully processed printers");
-    }
-
-    printers
+            Printer {
+                name: system_printer.name,
+                system_name: system_printer.system_name,
+                uri: if system_printer.uri.is_empty() {
+                    None
+                } else {
+                    Some(system_printer.uri)
+                },
+                description: system_printer.description,
+                location: system_printer.location,
+                make_and_model: system_printer.driver_name,
+                media_sizes,
+                printer_id: None,
+            }
+        })
+        .collect()
 }
 
 /// Get all available printers from the CUPS system
@@ -153,9 +158,9 @@ pub async fn get_all_printers(verbose_debug: bool) -> Vec<Printer> {
         .unwrap_or_default()
 }
 
-/// Check for new printers and update the stored printers
+/// Check for new printers, sync with the API, and refresh the shared cache
 pub async fn check_for_new_printers(
-    printers_data: Arc<Mutex<HashSet<String>>>,
+    printer_cache: &PrinterCache,
     http_client: &Client,
     config: &Arc<RwLock<crate::models::Config>>,
     verbose_debug: bool,
@@ -197,38 +202,32 @@ pub async fn check_for_new_printers(
         );
     }
 
-    {
-        let mut printers_set = printers_data
-            .lock()
-            .expect("Failed to acquire printers_data lock");
-        printers_set.clear();
-        for printer in updated_printers.keys() {
-            printers_set.insert(printer.clone());
-        }
-    }
     let new_printers: Vec<Printer> = updated_printers
         .values()
         .filter(|p| !saved_printers.contains_key(&p.system_name))
         .cloned()
         .collect();
 
+    *crate::utils::sync::write(printer_cache) = updated_printers;
+
     Ok(new_printers)
 }
 
 /// Log discovered printers
-fn log_new_printers(printers: &[Printer], context: &str) {
+fn log_new_printers(printers: &[Printer]) {
     if printers.is_empty() {
         return;
     }
-    info!(count = printers.len(), "Found new printers{}", context);
+    info!(count = printers.len(), "Found new printers");
     for printer in printers {
         info!(printer = %printer.name, "New printer discovered");
     }
 }
 
-/// Background task to periodically check for new printers
+/// Background task to periodically check for new printers.
+/// The first iteration runs immediately and doubles as startup initialization.
 pub async fn printer_checker_task(
-    printers_data: Arc<Mutex<HashSet<String>>>,
+    printer_cache: PrinterCache,
     config: Arc<RwLock<crate::models::Config>>,
     http_client: Client,
     cancel_token: CancellationToken,
@@ -237,16 +236,13 @@ pub async fn printer_checker_task(
     let interval = read_config(&config).printer_check_interval;
     info!("Starting printer sync (interval: {} minutes)", interval);
 
-    // Initial check at startup
-    match check_for_new_printers(printers_data.clone(), &http_client, &config, verbose_debug).await
-    {
-        Ok(new_printers) => log_new_printers(&new_printers, " at startup"),
-        Err(e) => error!(error = %e, "Error checking for new printers at startup"),
-    }
-
-    // Periodic checks
     loop {
-        let interval = read_config(&config).printer_check_interval;
+        match check_for_new_printers(&printer_cache, &http_client, &config, verbose_debug).await {
+            Ok(new_printers) => log_new_printers(&new_printers),
+            Err(e) => error!(error = %e, "Error checking for new printers"),
+        }
+
+        let interval = read_config(&config).printer_check_interval.max(1);
 
         tokio::select! {
             _ = cancel_token.cancelled() => {
@@ -254,17 +250,6 @@ pub async fn printer_checker_task(
                 return;
             }
             _ = time::sleep(Duration::from_secs(interval * 60)) => {}
-        }
-
-        if cancel_token.is_cancelled() {
-            return;
-        }
-
-        match check_for_new_printers(printers_data.clone(), &http_client, &config, verbose_debug)
-            .await
-        {
-            Ok(new_printers) => log_new_printers(&new_printers, ""),
-            Err(e) => error!(error = %e, "Error checking for new printers"),
         }
     }
 }

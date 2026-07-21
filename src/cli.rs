@@ -89,8 +89,7 @@ pub fn print_local_file(
             }
         }
     } else {
-        let mut printers = get_printers();
-        match printers.pop() {
+        match get_printers().into_iter().next() {
             Some(p) => p,
             None => {
                 eprintln!("Error: No printers available");

@@ -10,8 +10,10 @@ mod utils;
 
 use cli::{Cli, Commands, build_env_filter, list_printers, print_local_file};
 use server::run_server;
-use services::print_job::{fetch_and_print_job_by_id, new_in_flight_jobs};
+use services::print_job::{JobContext, fetch_and_print_job_by_id, new_in_flight_jobs};
+use services::printer::new_printer_cache;
 use utils::config::load_config;
+use utils::http::build_http_client;
 use utils::tui::run_tui;
 
 #[tokio::main]
@@ -43,11 +45,12 @@ async fn main() -> std::io::Result<()> {
                     std::process::exit(1);
                 }
 
-                let http_client = reqwest::Client::new();
-                let in_flight_jobs = new_in_flight_jobs();
-                match fetch_and_print_job_by_id(job_id, &http_client, &config, &in_flight_jobs)
-                    .await
-                {
+                let ctx = JobContext {
+                    http_client: build_http_client(),
+                    in_flight_jobs: new_in_flight_jobs(),
+                    printer_cache: new_printer_cache(),
+                };
+                match fetch_and_print_job_by_id(job_id, &config, &ctx).await {
                     Ok(_) => {}
                     Err(e) => {
                         eprintln!("Error: {}", e);

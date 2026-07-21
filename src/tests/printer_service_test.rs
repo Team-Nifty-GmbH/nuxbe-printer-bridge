@@ -1,8 +1,7 @@
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use crate::models::Config;
-use crate::services::printer::get_all_printers;
+use crate::services::printer::{get_all_printers, new_printer_cache};
 use crate::utils::printer_storage::load_printers;
 
 #[tokio::test]
@@ -26,13 +25,10 @@ async fn test_get_all_printers() {
 fn test_check_for_new_printers() {
     // In this simplified test, we're just checking that we can create the
     // required data structures, without actually calling the function
-    let _printers_data = Arc::new(Mutex::new(HashSet::<String>::new()));
+    let _printer_cache = new_printer_cache();
     let _config = Arc::new(Mutex::new(Config::default()));
 
     println!("Created printer data structures for testing");
-
-    // Just verify we can get this far without errors
-    assert!(true);
 }
 
 #[test]

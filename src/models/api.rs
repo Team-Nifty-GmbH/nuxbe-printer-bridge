@@ -17,13 +17,17 @@ pub struct ApiPrinter {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ApiPrinterResponse {
-    pub status: u16,
     pub data: ApiPrinterData,
 }
 
+/// Laravel paginator envelope; only the fields needed to walk all pages.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ApiPrinterData {
     pub data: Vec<ApiPrinter>,
+    #[serde(default)]
+    pub current_page: Option<u32>,
+    #[serde(default)]
+    pub last_page: Option<u32>,
 }
 
 // Convert from local Printer to ApiPrinter for sending to server

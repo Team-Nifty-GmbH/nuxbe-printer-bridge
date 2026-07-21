@@ -1,19 +1,23 @@
+use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use printers::common::base::job::PrinterJobOptions;
+use printers::common::base::job::{PrinterJobOptions, PrinterJobState};
 use printers::{get_printer_by_name, get_printers};
 use reqwest::Client;
-use std::io::Write;
 use tempfile::NamedTempFile;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::error::SpoolerResult;
-use crate::models::{Config, PrintJob, PrintJobResponse, PrintJobStatus};
+use crate::models::{Config, PrintJob, PrintJobResponse, PrintJobStatus, Printer};
+use crate::services::printer::PrinterCache;
 use crate::utils::config::read_config;
 use crate::utils::http::with_auth_header;
+use crate::utils::printer_storage::load_printers;
+use crate::utils::sync::lock;
 
 /// A print job that has been submitted to CUPS and is awaiting final status.
 #[derive(Debug, Clone)]
@@ -26,16 +30,62 @@ pub struct InFlightJob {
     pub last_status: PrintJobStatus,
 }
 
+/// Tracks jobs between submission and their terminal CUPS state.
+#[derive(Debug, Default)]
+pub struct InFlightTracker {
+    jobs: Vec<InFlightJob>,
+    /// Jobs currently being downloaded/submitted, before a CUPS id exists.
+    reserved: HashSet<u32>,
+}
+
+impl InFlightTracker {
+    /// Reserve a job id for processing. Returns false if the job is already
+    /// reserved or tracked, so concurrent triggers (poll + WebSocket event)
+    /// can never print the same job twice.
+    fn reserve(&mut self, api_job_id: u32) -> bool {
+        !self.jobs.iter().any(|j| j.api_job_id == api_job_id) && self.reserved.insert(api_job_id)
+    }
+
+    /// Promote a reservation to a tracked in-flight job after CUPS accepted it.
+    fn confirm(&mut self, job: InFlightJob) {
+        self.reserved.remove(&job.api_job_id);
+        self.jobs.push(job);
+    }
+
+    /// Drop a reservation after a failed submission.
+    fn release(&mut self, api_job_id: u32) {
+        self.reserved.remove(&api_job_id);
+    }
+
+    /// Add a recovered job unless it is already tracked.
+    fn track_if_new(&mut self, job: InFlightJob) {
+        if !self.jobs.iter().any(|j| j.api_job_id == job.api_job_id) {
+            self.jobs.push(job);
+        }
+    }
+}
+
 /// Shared in-flight job tracker accessible from multiple tasks.
-pub type InFlightJobs = Arc<Mutex<Vec<InFlightJob>>>;
+pub type InFlightJobs = Arc<Mutex<InFlightTracker>>;
 
 /// Create a new empty in-flight jobs tracker.
 pub fn new_in_flight_jobs() -> InFlightJobs {
-    Arc::new(Mutex::new(Vec::new()))
+    Arc::new(Mutex::new(InFlightTracker::default()))
+}
+
+/// Shared handles the print workflow needs, bundled to keep signatures small.
+#[derive(Clone)]
+pub struct JobContext {
+    pub http_client: Client,
+    pub in_flight_jobs: InFlightJobs,
+    pub printer_cache: PrinterCache,
 }
 
 /// Maximum time (seconds) to wait for a CUPS job before marking it as failed.
 const CUPS_JOB_TIMEOUT_SECS: u64 = 300; // 5 minutes
+
+/// Maximum time (seconds) for a media file download (overrides the client default).
+const DOWNLOAD_TIMEOUT_SECS: u64 = 300;
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 
@@ -65,7 +115,7 @@ async fn update_print_job_status(
     }
 
     if status == PrintJobStatus::Completed {
-        payload["printed_at"] = serde_json::json!(chrono_now_utc());
+        payload["printed_at"] = serde_json::json!(now_utc());
     }
 
     let response = with_auth_header(http_client.put(&url), config)
@@ -87,208 +137,74 @@ async fn update_print_job_status(
     Ok(())
 }
 
-/// Return the current UTC time as an ISO 8601 string for the `printed_at` field.
-fn chrono_now_utc() -> String {
-    // Format: YYYY-MM-DD HH:MM:SS (Laravel-compatible)
-    let now = std::time::SystemTime::now();
-    let duration = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = duration.as_secs();
+/// Current UTC time as `YYYY-MM-DD HH:MM:SS` (Laravel-compatible) for `printed_at`.
+fn now_utc() -> String {
+    jiff::Timestamp::now()
+        .strftime("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
 
-    // Simple UTC formatting without pulling in the chrono crate
-    let days = secs / 86400;
-    let time_secs = secs % 86400;
-    let hours = time_secs / 3600;
-    let minutes = (time_secs % 3600) / 60;
-    let seconds = time_secs % 60;
+/// Fetch all incomplete print jobs from the API, following pagination so a
+/// backlog larger than one page is not silently truncated.
+pub async fn fetch_incomplete_jobs(
+    http_client: &Client,
+    config: &Config,
+) -> SpoolerResult<Vec<PrintJob>> {
+    let base_url = format!(
+        "{}/api/print-jobs?filter[is_completed]=false&include=printer",
+        config.flux_url
+    );
 
-    // Days since epoch to Y-M-D (simplified Gregorian)
-    let mut y = 1970i64;
-    let mut remaining_days = days as i64;
+    let mut jobs = Vec::new();
+    let mut page = 1u32;
+
     loop {
-        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
-            366
-        } else {
-            365
-        };
-        if remaining_days < days_in_year {
-            break;
+        let url = format!("{}&page={}", base_url, page);
+        debug!(url = %url, "Fetching print jobs");
+
+        let response = with_auth_header(http_client.get(&url), config)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(format!("Failed to fetch print jobs: {}", response.status()).into());
         }
-        remaining_days -= days_in_year;
-        y += 1;
-    }
-    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-    let month_days: [i64; 12] = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut m = 0usize;
-    for (i, &md) in month_days.iter().enumerate() {
-        if remaining_days < md {
-            m = i;
-            break;
+
+        let parsed: PrintJobResponse = serde_json::from_str(&response.text().await?)
+            .map_err(|e| format!("Failed to parse print jobs: {}", e))?;
+
+        jobs.extend(parsed.data.data);
+
+        if parsed.data.current_page >= parsed.data.last_page {
+            return Ok(jobs);
         }
-        remaining_days -= md;
+        page = parsed.data.current_page + 1;
     }
-
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        y,
-        m + 1,
-        remaining_days + 1,
-        hours,
-        minutes,
-        seconds
-    )
-}
-
-/// Fetch pending print job IDs from the API (Send-safe version for tokio::spawn)
-pub async fn fetch_pending_job_ids(
-    http_client: &Client,
-    config: &Config,
-) -> Result<Vec<u32>, String> {
-    let jobs_url = format!(
-        "{}/api/print-jobs?filter[is_completed]=false&include=printer",
-        config.flux_url
-    );
-
-    debug!(url = %jobs_url, "Fetching pending print job IDs");
-
-    let response = match with_auth_header(http_client.get(&jobs_url), config)
-        .header("Accept", "application/json")
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Failed to fetch print jobs: {}", e)),
-    };
-
-    if !response.status().is_success() {
-        return Err(format!("Failed to fetch print jobs: {}", response.status()));
-    }
-
-    let response_text = match response.text().await {
-        Ok(t) => t,
-        Err(e) => return Err(format!("Failed to read response: {}", e)),
-    };
-
-    let parsed_response: PrintJobResponse = match serde_json::from_str(&response_text) {
-        Ok(parsed) => parsed,
-        Err(e) => return Err(format!("Failed to parse print jobs: {}", e)),
-    };
-
-    Ok(parsed_response.data.data.iter().map(|job| job.id).collect())
-}
-
-/// Fetch in-flight jobs from the API (jobs with status queued/processing that have a cups_job_id).
-/// Used on startup to re-populate the in-flight tracker.
-pub async fn fetch_in_flight_jobs_from_api(
-    http_client: &Client,
-    config: &Config,
-) -> Result<Vec<PrintJob>, String> {
-    // Fetch jobs that are not completed — we'll filter for queued/processing client-side
-    let jobs_url = format!(
-        "{}/api/print-jobs?filter[is_completed]=false&include=printer",
-        config.flux_url
-    );
-
-    debug!(url = %jobs_url, "Fetching in-flight jobs from API for status recovery");
-
-    let response = match with_auth_header(http_client.get(&jobs_url), config)
-        .header("Accept", "application/json")
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => return Err(format!("Failed to fetch in-flight jobs: {}", e)),
-    };
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "Failed to fetch in-flight jobs: {}",
-            response.status()
-        ));
-    }
-
-    let response_text = match response.text().await {
-        Ok(t) => t,
-        Err(e) => return Err(format!("Failed to read response: {}", e)),
-    };
-
-    let parsed_response: PrintJobResponse = match serde_json::from_str(&response_text) {
-        Ok(parsed) => parsed,
-        Err(e) => return Err(format!("Failed to parse in-flight jobs: {}", e)),
-    };
-
-    // Filter to only jobs that have a cups_job_id and a queued/processing status
-    let in_flight: Vec<PrintJob> = parsed_response
-        .data
-        .data
-        .into_iter()
-        .filter(|job| {
-            job.cups_job_id.is_some()
-                && matches!(
-                    job.status,
-                    Some(PrintJobStatus::Queued) | Some(PrintJobStatus::Processing)
-                )
-        })
-        .collect();
-
-    Ok(in_flight)
 }
 
 // ── Printer helpers ─────────────────────────────────────────────────────────
 
-/// Get the default system printer system_name
-fn get_default_printer_system_name() -> String {
-    let system_printers = get_printers();
-    if let Some(first) = system_printers.first() {
-        return first.system_name.clone();
-    }
-    "default".to_string()
+/// System default printer (first CUPS printer) system_name, if any.
+fn default_printer_system_name() -> Option<String> {
+    get_printers().into_iter().next().map(|p| p.system_name)
 }
 
-/// Resolve printer system_name from job data for stable CUPS addressing
-async fn resolve_printer_name(job: &PrintJob) -> String {
-    // Try to resolve via saved printers by ID for stable system_name
-    let printer_id = job.printer.as_ref().map(|p| p.id).or(job.printer_id);
-    if let Some(id) = printer_id {
-        let saved_printers = crate::utils::printer_storage::load_printers();
-        for (system_name, printer) in &saved_printers {
-            if printer.printer_id == Some(id) {
-                debug!(
-                    job_id = job.id,
-                    printer_name = %printer.name,
-                    system_name = %system_name,
-                    "Resolved printer system_name"
-                );
-                return system_name.clone();
-            }
-        }
-    }
+/// Resolve a synced printer id to its CUPS system_name via the shared cache,
+/// falling back to the on-disk printer store when the cache is empty (CLI use).
+fn resolve_printer_system_name(printer_id: u32, cache: &PrinterCache) -> Option<String> {
+    let find = |map: &HashMap<String, Printer>| {
+        map.values()
+            .find(|p| p.printer_id == Some(printer_id))
+            .map(|p| p.system_name.clone())
+    };
 
-    // Fallback: use name from job data (get_printer_by_name matches both name and system_name)
-    if let Some(ref printer) = job.printer {
-        debug!(
-            job_id = job.id,
-            printer_name = %printer.name,
-            "Falling back to printer name from job data"
-        );
-        printer.name.clone()
+    let guard = crate::utils::sync::read(cache);
+    if guard.is_empty() {
+        drop(guard);
+        find(&load_printers())
     } else {
-        debug!(job_id = job.id, "Using default printer");
-        get_default_printer_system_name()
+        find(&guard)
     }
 }
 
@@ -305,6 +221,7 @@ async fn download_file(
 
     let file_response = with_auth_header(http_client.get(&file_url), config)
         .header("Accept", "application/octet-stream")
+        .timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
         .send()
         .await?;
 
@@ -319,48 +236,45 @@ async fn download_file(
 
     let file_content = file_response.bytes().await?;
 
-    let mut temp_file = NamedTempFile::new()?;
-    temp_file.write_all(&file_content)?;
+    let temp_file = tokio::task::spawn_blocking(move || -> std::io::Result<NamedTempFile> {
+        let mut temp_file = NamedTempFile::new()?;
+        temp_file.write_all(&file_content)?;
+        Ok(temp_file)
+    })
+    .await
+    .map_err(|e| format!("Temp file task failed: {}", e))??;
 
     Ok(temp_file)
 }
 
-/// Download, print, and track job status — core print workflow.
+/// Resolve the target printer and submit the file to CUPS (blocking FFI).
 ///
-/// Instead of immediately marking the job as completed, this submits to CUPS
-/// and registers the job as in-flight so the status checker can track it.
-async fn process_print_job(
-    job: &PrintJob,
-    http_client: &Client,
-    config: &Config,
-    in_flight_jobs: &InFlightJobs,
-) -> SpoolerResult<()> {
-    let printer_name = resolve_printer_name(job).await;
+/// Resolution order: synced printer id → printer name from the job → system
+/// default when the job names no printer at all. A printer that is named but
+/// missing from CUPS is an error — never print on an arbitrary device.
+fn submit_to_cups(
+    job_id: u32,
+    printer_id: Option<u32>,
+    printer_name: Option<String>,
+    temp_path: &str,
+    cache: &PrinterCache,
+) -> Result<(u64, String), String> {
+    let resolved = printer_id
+        .and_then(|id| resolve_printer_system_name(id, cache))
+        .or(printer_name)
+        .or_else(default_printer_system_name);
 
-    // Download file
-    let temp_file = download_file(http_client, config, job.media_id).await?;
-
-    // Get printer with fallback
-    let printer = match get_printer_by_name(&printer_name) {
-        Some(p) => p,
-        None => {
-            let mut printers = get_printers();
-            let default_printer = printers.pop().ok_or("No printers available")?;
-            warn!(
-                job_id = job.id,
-                requested_printer = %printer_name,
-                fallback_printer = %default_printer.name,
-                "Printer not found, using default"
-            );
-            default_printer
-        }
+    let Some(name) = resolved else {
+        return Err("No printers available".to_string());
     };
 
-    // Print file
-    let temp_path = temp_file.path().to_str().ok_or("Invalid temp file path")?;
+    let Some(printer) = get_printer_by_name(&name) else {
+        return Err(format!("Printer '{}' not found in CUPS", name));
+    };
 
+    let job_name = format!("Print Job {}", job_id);
     let job_options = PrinterJobOptions {
-        name: Some(&format!("Print Job {}", job.id)),
+        name: Some(&job_name),
         ..PrinterJobOptions::none()
     };
 
@@ -368,20 +282,84 @@ async fn process_print_job(
         .print_file(temp_path, job_options)
         .map_err(|e| format!("Failed to print: {:?}", e))?;
 
+    Ok((cups_job_id, printer.system_name))
+}
+
+/// Download, print, and track job status — core print workflow.
+///
+/// Reserves the job id up front so concurrent triggers cannot double-print,
+/// submits to CUPS, and registers the job as in-flight for the status checker.
+pub async fn process_print_job(
+    job: &PrintJob,
+    config: &Config,
+    ctx: &JobContext,
+) -> SpoolerResult<()> {
+    if !lock(&ctx.in_flight_jobs).reserve(job.id) {
+        info!(job_id = job.id, "Job already being processed, skipping");
+        return Ok(());
+    }
+
+    let result = submit_print_job(job, config, ctx).await;
+    if result.is_err() {
+        lock(&ctx.in_flight_jobs).release(job.id);
+    }
+    result
+}
+
+async fn submit_print_job(job: &PrintJob, config: &Config, ctx: &JobContext) -> SpoolerResult<()> {
+    let temp_file = download_file(&ctx.http_client, config, job.media_id).await?;
+    let temp_path = temp_file
+        .path()
+        .to_str()
+        .ok_or("Invalid temp file path")?
+        .to_string();
+
+    let job_id = job.id;
+    let printer_id = job.printer.as_ref().map(|p| p.id).or(job.printer_id);
+    let printer_name = job.printer.as_ref().map(|p| p.name.clone());
+    let cache = ctx.printer_cache.clone();
+
+    let submitted = tokio::task::spawn_blocking(move || {
+        submit_to_cups(job_id, printer_id, printer_name, &temp_path, &cache)
+    })
+    .await
+    .map_err(|e| format!("CUPS task failed: {}", e))?;
+
+    let (cups_job_id, system_name) = match submitted {
+        Ok(result) => result,
+        Err(msg) => {
+            // Submission failures don't fix themselves — mark the job failed
+            // in the API instead of leaving it pending (or printing elsewhere).
+            error!(job_id = job.id, error = %msg, "Failed to submit job to CUPS");
+            if let Err(e) = update_print_job_status(
+                job.id,
+                None,
+                PrintJobStatus::Failed,
+                Some(&msg),
+                &ctx.http_client,
+                config,
+            )
+            .await
+            {
+                warn!(job_id = job.id, error = %e, "Failed to update job status to failed");
+            }
+            return Err(msg.into());
+        }
+    };
+
     info!(
         job_id = job.id,
         cups_job_id,
-        printer = %printer.name,
+        printer = %system_name,
         "Print job submitted to CUPS"
     );
 
-    // Update API: mark as queued with cups_job_id
     match update_print_job_status(
         job.id,
         Some(cups_job_id),
         PrintJobStatus::Queued,
         None,
-        http_client,
+        &ctx.http_client,
         config,
     )
     .await
@@ -390,53 +368,20 @@ async fn process_print_job(
         Err(e) => warn!(job_id = job.id, error = %e, "Failed to update job status to queued"),
     }
 
-    // Register as in-flight for the status checker to track
-    let in_flight = InFlightJob {
+    lock(&ctx.in_flight_jobs).confirm(InFlightJob {
         api_job_id: job.id,
         cups_job_id,
-        printer_name: printer.system_name.clone(),
+        printer_name: system_name,
         submitted_at: Instant::now(),
         last_status: PrintJobStatus::Queued,
-    };
-
-    in_flight_jobs
-        .lock()
-        .expect("Failed to acquire in_flight_jobs lock")
-        .push(in_flight);
+    });
 
     Ok(())
 }
 
-/// Fetch print jobs from the API and process them
-pub async fn fetch_print_jobs(
-    http_client: &Client,
-    config: &mut Config,
-    in_flight_jobs: &InFlightJobs,
-) -> SpoolerResult<Vec<PrintJob>> {
-    let jobs_url = format!(
-        "{}/api/print-jobs?filter[is_completed]=false&include=printer",
-        config.flux_url
-    );
-
-    debug!(url = %jobs_url, "Fetching print jobs");
-
-    let response = with_auth_header(http_client.get(&jobs_url), config)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        return Err(format!("Failed to fetch print jobs: {}", response.status()).into());
-    }
-
-    let response_text = response.text().await?;
-
-    let parsed_response: PrintJobResponse = serde_json::from_str(&response_text).map_err(|e| {
-        error!(error = %e, "Failed to parse print jobs response");
-        format!("Failed to parse API response: {}", e)
-    })?;
-
-    let jobs = parsed_response.data.data;
+/// Fetch print jobs from the API and process them concurrently.
+pub async fn fetch_print_jobs(config: &Config, ctx: &JobContext) -> SpoolerResult<Vec<PrintJob>> {
+    let jobs = fetch_incomplete_jobs(&ctx.http_client, config).await?;
 
     if jobs.is_empty() {
         debug!("No print jobs found for this instance");
@@ -445,21 +390,25 @@ pub async fn fetch_print_jobs(
 
     info!(job_count = jobs.len(), "Processing print jobs");
 
+    let mut handles = Vec::new();
     for job in &jobs {
-        // Skip jobs that are already in-flight (have a cups_job_id and queued/processing status)
-        if job.cups_job_id.is_some()
-            && matches!(
-                job.status,
-                Some(PrintJobStatus::Queued) | Some(PrintJobStatus::Processing)
-            )
-        {
+        if job.is_in_flight() {
             debug!(job_id = job.id, "Skipping in-flight job");
             continue;
         }
 
-        if let Err(e) = process_print_job(job, http_client, config, in_flight_jobs).await {
-            error!(job_id = job.id, error = %e, "Failed to process print job");
-        }
+        let job = job.clone();
+        let config = config.clone();
+        let ctx = ctx.clone();
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = process_print_job(&job, &config, &ctx).await {
+                error!(job_id = job.id, error = %e, "Failed to process print job");
+            }
+        }));
+    }
+
+    for handle in handles {
+        let _ = handle.await;
     }
 
     Ok(jobs)
@@ -468,17 +417,14 @@ pub async fn fetch_print_jobs(
 /// Single print job response from API (when fetching by ID)
 #[derive(serde::Deserialize, Debug)]
 struct SinglePrintJobResponse {
-    #[allow(dead_code)]
-    status: u16,
     data: PrintJob,
 }
 
 /// Fetch a single print job by ID from the API and print it
 pub async fn fetch_and_print_job_by_id(
     job_id: u32,
-    http_client: &Client,
     config: &Config,
-    in_flight_jobs: &InFlightJobs,
+    ctx: &JobContext,
 ) -> SpoolerResult<()> {
     let job_url = format!(
         "{}/api/print-jobs/{}?include=printer",
@@ -487,7 +433,7 @@ pub async fn fetch_and_print_job_by_id(
 
     info!(job_id, url = %job_url, "Fetching print job by ID");
 
-    let response = with_auth_header(http_client.get(&job_url), config)
+    let response = with_auth_header(ctx.http_client.get(&job_url), config)
         .header("Accept", "application/json")
         .send()
         .await?;
@@ -515,13 +461,12 @@ pub async fn fetch_and_print_job_by_id(
         "Fetched print job"
     );
 
-    // Check if job is already completed
     if job.is_completed {
         info!(job_id = job.id, "Job was already printed, skipping");
         return Ok(());
     }
 
-    process_print_job(&job, http_client, config, in_flight_jobs).await
+    process_print_job(&job, config, ctx).await
 }
 
 // ── Background tasks ────────────────────────────────────────────────────────
@@ -529,28 +474,23 @@ pub async fn fetch_and_print_job_by_id(
 /// Background task to periodically check for print jobs (polling mode)
 pub async fn job_checker_task(
     config: Arc<RwLock<Config>>,
-    http_client: Client,
+    ctx: JobContext,
     cancel_token: CancellationToken,
-    in_flight_jobs: InFlightJobs,
 ) {
     loop {
-        let mut config_clone = read_config(&config);
+        let config_snapshot = read_config(&config);
 
-        if !config_clone.reverb_disabled {
+        if !config_snapshot.reverb_disabled {
             info!("Polling is disabled. Using Reverb WebSockets instead");
             return;
         }
 
-        let interval = config_clone.job_check_interval;
+        let interval = config_snapshot.job_check_interval.max(1);
 
-        match fetch_print_jobs(&http_client, &mut config_clone, &in_flight_jobs).await {
+        match fetch_print_jobs(&config_snapshot, &ctx).await {
             Ok(jobs) => {
                 if !jobs.is_empty() {
                     info!(job_count = jobs.len(), "Processed print jobs");
-                }
-
-                if let Ok(mut guard) = config.write() {
-                    guard.flux_api_token = config_clone.flux_api_token;
                 }
             }
             Err(e) => error!(error = %e, "Error fetching print jobs"),
@@ -566,61 +506,197 @@ pub async fn job_checker_task(
     }
 }
 
-/// Background task that polls CUPS for the final status of in-flight print jobs.
-///
-/// Runs every 15 seconds and checks each in-flight job against CUPS job history.
-/// When a job reaches a terminal state (completed, cancelled, aborted) or times out,
-/// the API is updated and the job is removed from the in-flight tracker.
-pub async fn job_status_checker_task(
-    config: Arc<RwLock<Config>>,
-    http_client: Client,
-    cancel_token: CancellationToken,
-    in_flight_jobs: InFlightJobs,
-) {
-    // Re-populate in-flight jobs from the API on startup
+/// Re-populate the in-flight tracker from the API after a restart.
+async fn recover_in_flight_jobs(config: &Config, ctx: &JobContext) {
+    let jobs = match fetch_incomplete_jobs(&ctx.http_client, config).await {
+        Ok(jobs) => jobs,
+        Err(e) => {
+            warn!(error = %e, "Failed to recover in-flight jobs from API");
+            return;
+        }
+    };
+
+    let default_name = tokio::task::spawn_blocking(default_printer_system_name)
+        .await
+        .ok()
+        .flatten();
+
+    let mut recovered = 0usize;
+    let mut tracker = lock(&ctx.in_flight_jobs);
+    for job in jobs.iter().filter(|j| j.is_in_flight()) {
+        let Some(cups_id) = job.cups_job_id else {
+            continue;
+        };
+        let printer_name = job
+            .printer
+            .as_ref()
+            .map(|p| p.name.clone())
+            .or_else(|| default_name.clone());
+        let Some(printer_name) = printer_name else {
+            continue;
+        };
+
+        tracker.track_if_new(InFlightJob {
+            api_job_id: job.id,
+            cups_job_id: cups_id,
+            printer_name,
+            submitted_at: Instant::now(),
+            last_status: job.status.clone().unwrap_or(PrintJobStatus::Queued),
+        });
+        recovered += 1;
+    }
+
+    if recovered > 0 {
+        info!(recovered, "Recovered in-flight jobs from API");
+    }
+}
+
+/// Query CUPS once for the states of the given job ids on one printer.
+fn query_cups_states(printer_name: &str, wanted: &[u64]) -> HashMap<u64, PrinterJobState> {
+    let mut states = HashMap::new();
+    let Some(printer) = get_printer_by_name(printer_name) else {
+        return states;
+    };
+
+    for cups_job in printer
+        .get_active_jobs()
+        .into_iter()
+        .chain(printer.get_job_history())
     {
-        let config_snapshot = read_config(&config);
-        match fetch_in_flight_jobs_from_api(&http_client, &config_snapshot).await {
-            Ok(api_jobs) => {
-                if !api_jobs.is_empty() {
-                    let mut tracker = in_flight_jobs
-                        .lock()
-                        .expect("Failed to acquire in_flight_jobs lock");
-                    for job in &api_jobs {
-                        let Some(cups_id) = job.cups_job_id else {
-                            continue;
-                        };
+        if wanted.contains(&cups_job.id) {
+            states.insert(cups_job.id, cups_job.state);
+        }
+    }
+    states
+}
 
-                        // Resolve printer name for this job
-                        let printer_name = if let Some(ref p) = job.printer {
-                            p.name.clone()
-                        } else {
-                            get_default_printer_system_name()
-                        };
+/// Push a status change for one in-flight job to the API and update/remove it
+/// in the tracker.
+async fn apply_status_change(
+    job: &InFlightJob,
+    new_status: PrintJobStatus,
+    error_msg: Option<&str>,
+    config: &Config,
+    ctx: &JobContext,
+) {
+    match update_print_job_status(
+        job.api_job_id,
+        None,
+        new_status.clone(),
+        error_msg,
+        &ctx.http_client,
+        config,
+    )
+    .await
+    {
+        Ok(_) => info!(job_id = job.api_job_id, status = %new_status, "Status updated in API"),
+        Err(e) => error!(
+            job_id = job.api_job_id,
+            status = %new_status,
+            error = %e,
+            "Failed to update status in API"
+        ),
+    }
 
-                        // Only add if not already tracked
-                        let already_tracked = tracker.iter().any(|j| j.api_job_id == job.id);
-                        if !already_tracked {
-                            tracker.push(InFlightJob {
-                                api_job_id: job.id,
-                                cups_job_id: cups_id as u64,
-                                printer_name,
-                                submitted_at: Instant::now(),
-                                last_status: job.status.clone().unwrap_or(PrintJobStatus::Queued),
-                            });
-                        }
-                    }
-                    info!(
-                        recovered = api_jobs.len(),
-                        "Recovered in-flight jobs from API"
+    let mut tracker = lock(&ctx.in_flight_jobs);
+    if new_status.is_terminal() {
+        tracker.jobs.retain(|j| j.api_job_id != job.api_job_id);
+    } else if let Some(tracked) = tracker
+        .jobs
+        .iter_mut()
+        .find(|j| j.api_job_id == job.api_job_id)
+    {
+        tracked.last_status = new_status;
+    }
+}
+
+/// Check all in-flight jobs of one printer against CUPS with a single query.
+async fn check_printer_jobs(
+    printer_name: String,
+    jobs: Vec<InFlightJob>,
+    config: &Config,
+    ctx: &JobContext,
+) {
+    let wanted: Vec<u64> = jobs.iter().map(|j| j.cups_job_id).collect();
+    let name = printer_name.clone();
+
+    let states = match tokio::task::spawn_blocking(move || query_cups_states(&name, &wanted)).await
+    {
+        Ok(states) => states,
+        Err(e) => {
+            error!(printer = %printer_name, error = %e, "Failed to query CUPS job status");
+            return;
+        }
+    };
+
+    for job in &jobs {
+        match states.get(&job.cups_job_id) {
+            Some(state) => {
+                let new_status = PrintJobStatus::from(state.clone());
+                if new_status == job.last_status {
+                    trace!(
+                        job_id = job.api_job_id,
+                        cups_job_id = job.cups_job_id,
+                        status = %new_status,
+                        "CUPS job status unchanged"
+                    );
+                    continue;
+                }
+
+                let error_msg = (new_status == PrintJobStatus::Cancelled)
+                    .then_some("Job cancelled or aborted by CUPS");
+
+                info!(
+                    job_id = job.api_job_id,
+                    cups_job_id = job.cups_job_id,
+                    status = %new_status,
+                    "CUPS job status changed"
+                );
+                apply_status_change(job, new_status, error_msg, config, ctx).await;
+            }
+            None => {
+                // Job not found in CUPS — check if it timed out
+                let elapsed = job.submitted_at.elapsed().as_secs();
+                if elapsed > CUPS_JOB_TIMEOUT_SECS {
+                    warn!(
+                        job_id = job.api_job_id,
+                        cups_job_id = job.cups_job_id,
+                        elapsed_secs = elapsed,
+                        "CUPS job disappeared from queue after timeout"
+                    );
+                    apply_status_change(
+                        job,
+                        PrintJobStatus::Failed,
+                        Some("Job disappeared from CUPS queue"),
+                        config,
+                        ctx,
+                    )
+                    .await;
+                } else {
+                    trace!(
+                        job_id = job.api_job_id,
+                        cups_job_id = job.cups_job_id,
+                        elapsed_secs = elapsed,
+                        "CUPS job not found yet, still within timeout"
                     );
                 }
             }
-            Err(e) => {
-                warn!(error = %e, "Failed to recover in-flight jobs from API");
-            }
         }
     }
+}
+
+/// Background task that polls CUPS for the final status of in-flight print jobs.
+///
+/// Runs every 15 seconds; printers are checked concurrently, each with a single
+/// CUPS query covering all of its in-flight jobs. When a job reaches a terminal
+/// state (completed, cancelled, aborted) or times out, the API is updated and
+/// the job is removed from the in-flight tracker.
+pub async fn job_status_checker_task(
+    config: Arc<RwLock<Config>>,
+    ctx: JobContext,
+    cancel_token: CancellationToken,
+) {
+    recover_in_flight_jobs(&read_config(&config), &ctx).await;
 
     let check_interval = Duration::from_secs(15);
 
@@ -635,13 +711,11 @@ pub async fn job_status_checker_task(
 
         // Take a snapshot of in-flight jobs to avoid holding the lock during async work
         let snapshot: Vec<InFlightJob> = {
-            let tracker = in_flight_jobs
-                .lock()
-                .expect("Failed to acquire in_flight_jobs lock");
-            if tracker.is_empty() {
+            let tracker = lock(&ctx.in_flight_jobs);
+            if tracker.jobs.is_empty() {
                 continue;
             }
-            tracker.clone()
+            tracker.jobs.clone()
         };
 
         trace!(
@@ -650,172 +724,76 @@ pub async fn job_status_checker_task(
         );
 
         let config_snapshot = read_config(&config);
-        let mut completed_ids: Vec<u32> = Vec::new();
 
-        for job in &snapshot {
-            let printer_name = job.printer_name.clone();
-            let cups_job_id = job.cups_job_id;
-
-            // Query CUPS in a blocking task (CUPS FFI is not async-safe)
-            let cups_state = tokio::task::spawn_blocking(move || {
-                let printer = match get_printer_by_name(&printer_name) {
-                    Some(p) => p,
-                    None => return None,
-                };
-
-                // Check active jobs first, then history
-                let active = printer.get_active_jobs();
-                if let Some(cups_job) = active.iter().find(|j| j.id == cups_job_id) {
-                    return Some(cups_job.state.clone());
-                }
-
-                let history = printer.get_job_history();
-                history
-                    .iter()
-                    .find(|j| j.id == cups_job_id)
-                    .map(|j| j.state.clone())
-            })
-            .await;
-
-            let cups_state = match cups_state {
-                Ok(state) => state,
-                Err(e) => {
-                    error!(
-                        job_id = job.api_job_id,
-                        error = %e,
-                        "Failed to query CUPS job status"
-                    );
-                    continue;
-                }
-            };
-
-            match cups_state {
-                Some(cups_state) => {
-                    let new_status = PrintJobStatus::from(cups_state);
-
-                    // Skip if status hasn't changed
-                    if new_status == job.last_status {
-                        trace!(
-                            job_id = job.api_job_id,
-                            cups_job_id = job.cups_job_id,
-                            status = %new_status,
-                            "CUPS job status unchanged"
-                        );
-                        continue;
-                    }
-
-                    let error_msg = if new_status == PrintJobStatus::Cancelled {
-                        Some("Job cancelled or aborted by CUPS")
-                    } else {
-                        None
-                    };
-
-                    info!(
-                        job_id = job.api_job_id,
-                        cups_job_id = job.cups_job_id,
-                        status = %new_status,
-                        "CUPS job status changed"
-                    );
-
-                    match update_print_job_status(
-                        job.api_job_id,
-                        None,
-                        new_status.clone(),
-                        error_msg,
-                        &http_client,
-                        &config_snapshot,
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            info!(
-                                job_id = job.api_job_id,
-                                status = %new_status,
-                                "Status updated in API"
-                            );
-                        }
-                        Err(e) => {
-                            error!(
-                                job_id = job.api_job_id,
-                                status = %new_status,
-                                error = %e,
-                                "Failed to update status in API"
-                            );
-                        }
-                    }
-
-                    if new_status.is_terminal() {
-                        completed_ids.push(job.api_job_id);
-                    } else {
-                        // Update last_status in the tracker for non-terminal transitions
-                        let mut tracker = in_flight_jobs
-                            .lock()
-                            .expect("Failed to acquire in_flight_jobs lock");
-                        if let Some(tracked) =
-                            tracker.iter_mut().find(|j| j.api_job_id == job.api_job_id)
-                        {
-                            tracked.last_status = new_status;
-                        }
-                    }
-                }
-                None => {
-                    // Job not found in CUPS — check if it timed out
-                    let elapsed = job.submitted_at.elapsed().as_secs();
-                    if elapsed > CUPS_JOB_TIMEOUT_SECS {
-                        warn!(
-                            job_id = job.api_job_id,
-                            cups_job_id = job.cups_job_id,
-                            elapsed_secs = elapsed,
-                            "CUPS job disappeared from queue after timeout"
-                        );
-                        match update_print_job_status(
-                            job.api_job_id,
-                            None,
-                            PrintJobStatus::Failed,
-                            Some("Job disappeared from CUPS queue"),
-                            &http_client,
-                            &config_snapshot,
-                        )
-                        .await
-                        {
-                            Ok(_) => {
-                                info!(
-                                    job_id = job.api_job_id,
-                                    "Status updated to failed (timeout)"
-                                );
-                            }
-                            Err(e) => {
-                                error!(
-                                    job_id = job.api_job_id,
-                                    error = %e,
-                                    "Failed to update timeout status"
-                                );
-                            }
-                        }
-                        completed_ids.push(job.api_job_id);
-                    } else {
-                        trace!(
-                            job_id = job.api_job_id,
-                            cups_job_id = job.cups_job_id,
-                            elapsed_secs = elapsed,
-                            "CUPS job not found yet, still within timeout"
-                        );
-                    }
-                }
-            }
+        let mut by_printer: HashMap<String, Vec<InFlightJob>> = HashMap::new();
+        for job in snapshot {
+            by_printer
+                .entry(job.printer_name.clone())
+                .or_default()
+                .push(job);
         }
 
-        // Remove completed/failed jobs from the in-flight tracker
-        if !completed_ids.is_empty() {
-            let mut tracker = in_flight_jobs
-                .lock()
-                .expect("Failed to acquire in_flight_jobs lock");
-            tracker.retain(|j| !completed_ids.contains(&j.api_job_id));
-            debug!(
-                removed = completed_ids.len(),
-                remaining = tracker.len(),
-                "Cleaned up in-flight job tracker"
-            );
+        let mut handles = Vec::new();
+        for (printer_name, jobs) in by_printer {
+            let config = config_snapshot.clone();
+            let ctx = ctx.clone();
+            handles.push(tokio::spawn(async move {
+                check_printer_jobs(printer_name, jobs, &config, &ctx).await;
+            }));
         }
+        for handle in handles {
+            let _ = handle.await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn in_flight(api_job_id: u32) -> InFlightJob {
+        InFlightJob {
+            api_job_id,
+            cups_job_id: 42,
+            printer_name: "printer".to_string(),
+            submitted_at: Instant::now(),
+            last_status: PrintJobStatus::Queued,
+        }
+    }
+
+    #[test]
+    fn tracker_prevents_duplicate_processing() {
+        let mut tracker = InFlightTracker::default();
+
+        assert!(tracker.reserve(1));
+        assert!(!tracker.reserve(1), "reserved job must not be re-reserved");
+
+        tracker.confirm(in_flight(1));
+        assert!(!tracker.reserve(1), "tracked job must not be re-reserved");
+
+        assert!(tracker.reserve(2));
+        tracker.release(2);
+        assert!(tracker.reserve(2), "released job can be reserved again");
+    }
+
+    #[test]
+    fn tracker_track_if_new_ignores_duplicates() {
+        let mut tracker = InFlightTracker::default();
+
+        tracker.track_if_new(in_flight(1));
+        tracker.track_if_new(in_flight(1));
+        assert_eq!(tracker.jobs.len(), 1);
+    }
+
+    #[test]
+    fn now_utc_is_laravel_format() {
+        let timestamp = now_utc();
+        // YYYY-MM-DD HH:MM:SS
+        assert_eq!(timestamp.len(), 19);
+        assert_eq!(&timestamp[4..5], "-");
+        assert_eq!(&timestamp[7..8], "-");
+        assert_eq!(&timestamp[10..11], " ");
+        assert_eq!(&timestamp[13..14], ":");
+        assert_eq!(&timestamp[16..17], ":");
     }
 }
