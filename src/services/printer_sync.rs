@@ -110,7 +110,7 @@ pub async fn sync_printers_with_api(
         }
     }
 
-    for (_system_name, printer) in updated_printers.iter_mut() {
+    for printer in updated_printers.values_mut() {
         if printer.printer_id.is_none() {
             if verbose_debug {
                 debug!(printer = %printer.name, "Creating new printer in API");
