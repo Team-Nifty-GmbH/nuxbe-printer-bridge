@@ -140,11 +140,17 @@ jobs:
               # Reload systemd to recognize the new service file
               systemctl daemon-reload >/dev/null 2>&1 || true
 
-              # Enable service but don't start it
-              echo "Nuxbe Printer Bridge has been installed but not started."
-              echo "Configure the service with: nuxbe-printer-bridge config"
-              echo "Then start it with: systemctl start nuxbe-printer-bridge.service"
-              echo "To enable at boot: systemctl enable nuxbe-printer-bridge.service"
+              # On upgrade ($2 = old version), restart the service if it is running
+              # so unattended-upgrades doesn't leave the old binary active
+              if [ -n "$2" ] && systemctl is-active --quiet nuxbe-printer-bridge.service; then
+                  systemctl restart nuxbe-printer-bridge.service >/dev/null 2>&1 || true
+              else
+                  # Fresh install: don't start, configuration is needed first
+                  echo "Nuxbe Printer Bridge has been installed but not started."
+                  echo "Configure the service with: nuxbe-printer-bridge config"
+                  echo "Then start it with: systemctl start nuxbe-printer-bridge.service"
+                  echo "To enable at boot: systemctl enable nuxbe-printer-bridge.service"
+              fi
           fi
 
           exit 0
