@@ -98,6 +98,18 @@ else
     exit 1
 fi
 
+# Alpine packages, uploaded as a ready-made tree: alpine/<branch>/<repo>/<arch>/
+# with the APKINDEX.tar.gz already signed by the build, plus the public key
+# beside it. Nothing to index here, so it is only moved into place. The tree
+# is merged, so a branch or architecture uploaded on its own does not remove
+# the others.
+if [ -d ${PACKAGE_DIR}/alpine ]; then
+    sudo mkdir -p ${REPO_DIR}/alpine
+    sudo cp -r ${PACKAGE_DIR}/alpine/. ${REPO_DIR}/alpine/
+    sudo rm -rf ${PACKAGE_DIR}/alpine
+    echo "Alpine repository updated"
+fi
+
 # Set permissions
 sudo chown -R www-data:www-data ${REPO_DIR}
 sudo chmod -R 755 ${REPO_DIR}

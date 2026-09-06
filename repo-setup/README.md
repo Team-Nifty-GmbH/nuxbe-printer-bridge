@@ -50,6 +50,23 @@ sudo systemctl reload nginx
     └── nuxbe-printer-bridge_0.1.0-1_amd64.deb
 ```
 
+## Alpine repository
+
+The same server also serves an Alpine package repository under `alpine/`. A
+build uploads a ready-made tree, `alpine/<branch>/<repo>/<arch>/` with the
+packages and an `APKINDEX.tar.gz` it signed itself, plus the public key as
+`alpine/<name>.rsa.pub`, to `/tmp/alpine` on the server; `update-repo.sh`
+merges it into the web root. There is nothing to index or sign here.
+
+An Alpine machine uses it with the public key in `/etc/apk/keys` and the
+repository in `/etc/apk/repositories`:
+
+```sh
+curl -fsSL https://apt.team-nifty.com/alpine/nuxpbx.rsa.pub -o /etc/apk/keys/nuxpbx.rsa.pub
+echo https://apt.team-nifty.com/alpine/v3.24/nuxpbx >> /etc/apk/repositories
+apk add nuxpbx
+```
+
 ## Client Usage
 
 Users can install from your repository:
