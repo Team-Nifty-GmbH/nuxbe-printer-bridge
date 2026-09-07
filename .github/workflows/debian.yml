@@ -245,4 +245,7 @@ jobs:
           scp -i ~/.ssh/deploy_key packages/*.deb deploy@$REPO_HOST:/tmp/
 
           # Update repository
-          ssh -i ~/.ssh/deploy_key deploy@$REPO_HOST 'sudo /opt/nuxbe-printer-bridge/repo-setup/scripts/update-repo.sh'
+          # The server is provisioned from Team-Nifty-GmbH/apt-repository; the
+          # second path is where the script lived here, for a server not yet
+          # taken over.
+          ssh -i ~/.ssh/deploy_key deploy@$REPO_HOST 'sudo -n /opt/apt-repository/scripts/update-repo.sh || sudo -n /opt/nuxbe-printer-bridge/repo-setup/scripts/update-repo.sh'
