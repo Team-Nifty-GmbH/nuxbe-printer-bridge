@@ -252,8 +252,17 @@ async fn download_file(
 /// Resolution order: synced printer id → printer name from the job → system
 /// default when the job names no printer at all. A printer that is named but
 /// missing from CUPS is an error — never print on an arbitrary device.
+/// CUPS options for a job: the copies, and the page size unless the job names none.
+fn cups_job_properties<'a>(size: &'a str, copies: &'a str) -> Vec<(&'a str, &'a str)> {
+    let mut properties = vec![("copies", copies)];
+    if !size.is_empty() {
+        properties.push(("PageSize", size));
+    }
+    properties
+}
+
 fn submit_to_cups(
-    job_id: u32,
+    job: &PrintJob,
     printer_id: Option<u32>,
     printer_name: Option<String>,
     temp_path: &str,
@@ -272,9 +281,12 @@ fn submit_to_cups(
         return Err(format!("Printer '{}' not found in CUPS", name));
     };
 
-    let job_name = format!("Print Job {}", job_id);
+    let job_name = format!("Print Job {}", job.id);
+    let copies = job.quantity.max(1).to_string();
+    let properties = cups_job_properties(&job.size, &copies);
     let job_options = PrinterJobOptions {
         name: Some(&job_name),
+        raw_properties: &properties,
         ..PrinterJobOptions::none()
     };
 
@@ -314,13 +326,13 @@ async fn submit_print_job(job: &PrintJob, config: &Config, ctx: &JobContext) -> 
         .ok_or("Invalid temp file path")?
         .to_string();
 
-    let job_id = job.id;
+    let cups_job = job.clone();
     let printer_id = job.printer.as_ref().map(|p| p.id).or(job.printer_id);
     let printer_name = job.printer.as_ref().map(|p| p.name.clone());
     let cache = ctx.printer_cache.clone();
 
     let submitted = tokio::task::spawn_blocking(move || {
-        submit_to_cups(job_id, printer_id, printer_name, &temp_path, &cache)
+        submit_to_cups(&cups_job, printer_id, printer_name, &temp_path, &cache)
     })
     .await
     .map_err(|e| format!("CUPS task failed: {}", e))?;
@@ -783,6 +795,15 @@ mod tests {
         tracker.track_if_new(in_flight(1));
         tracker.track_if_new(in_flight(1));
         assert_eq!(tracker.jobs.len(), 1);
+    }
+
+    #[test]
+    fn cups_job_properties_carry_copies_and_size() {
+        assert_eq!(
+            cups_job_properties("A4", "3"),
+            vec![("copies", "3"), ("PageSize", "A4")]
+        );
+        assert_eq!(cups_job_properties("", "1"), vec![("copies", "1")]);
     }
 
     #[test]

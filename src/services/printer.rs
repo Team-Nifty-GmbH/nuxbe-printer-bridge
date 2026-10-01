@@ -24,6 +24,16 @@ pub fn new_printer_cache() -> PrinterCache {
     Arc::new(RwLock::new(HashMap::new()))
 }
 
+/// Split the choices of a PageSize line. "Custom.WIDTHxHEIGHT" is the CUPS
+/// placeholder for a free size, not a size anyone can pick, so it is dropped.
+fn parse_page_sizes(sizes_part: &str) -> Vec<String> {
+    sizes_part
+        .split_whitespace()
+        .map(|s| s.trim_start_matches('*').to_string())
+        .filter(|s| !s.is_empty() && s != "Custom.WIDTHxHEIGHT")
+        .collect()
+}
+
 /// Query CUPS for supported media sizes of a printer via `lpoptions -p <name> -l`
 fn query_media_sizes(printer_name: &str, verbose_debug: bool) -> Vec<String> {
     let output = match Command::new("lpoptions")
@@ -57,11 +67,7 @@ fn query_media_sizes(printer_name: &str, verbose_debug: bool) -> Vec<String> {
             let Some(sizes_part) = line.split(':').nth(1) else {
                 continue;
             };
-            let sizes: Vec<String> = sizes_part
-                .split_whitespace()
-                .map(|s| s.trim_start_matches('*').to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
+            let sizes = parse_page_sizes(sizes_part);
 
             if verbose_debug {
                 trace!(
@@ -251,5 +257,18 @@ pub async fn printer_checker_task(
             }
             _ = time::sleep(Duration::from_secs(interval * 60)) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_page_sizes;
+
+    #[test]
+    fn parse_page_sizes_strips_default_marker_and_custom_placeholder() {
+        assert_eq!(
+            parse_page_sizes(" *A4 A5 Letter Custom.WIDTHxHEIGHT"),
+            vec!["A4", "A5", "Letter"]
+        );
     }
 }
