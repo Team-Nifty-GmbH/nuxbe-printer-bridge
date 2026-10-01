@@ -321,6 +321,10 @@ async fn update_printer_in_api(
     api_printer.spooler_name = config.instance_name.clone();
     // Ensure ID is set for update
     api_printer.id = printer.printer_id;
+    // Whether a printer is active or visible is decided in Flux, an update
+    // must not switch a hidden printer back on.
+    api_printer.is_active = None;
+    api_printer.is_visible = None;
 
     if verbose_debug {
         trace!(payload = ?api_printer, "Updating printer with payload");

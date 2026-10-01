@@ -11,7 +11,9 @@ pub struct ApiPrinter {
     pub location: Option<String>,
     pub make_and_model: Option<String>,
     pub media_sizes: Vec<String>, // Changed from Option<Vec<String>>
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub is_active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub is_visible: Option<bool>,
 }
 
@@ -72,5 +74,30 @@ impl From<&ApiPrinter> for crate::models::Printer {
             media_sizes: api_printer.media_sizes.clone(),
             printer_id: api_printer.id,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApiPrinter;
+
+    #[test]
+    fn unset_flags_are_left_out_of_the_payload() {
+        let printer = ApiPrinter {
+            id: Some(1),
+            name: "Printer".to_string(),
+            system_name: None,
+            uri: None,
+            spooler_name: "spooler".to_string(),
+            location: None,
+            make_and_model: None,
+            media_sizes: vec!["A4".to_string()],
+            is_active: None,
+            is_visible: None,
+        };
+
+        let json = serde_json::to_value(&printer).unwrap();
+        assert!(json.get("is_active").is_none());
+        assert!(json.get("is_visible").is_none());
     }
 }
