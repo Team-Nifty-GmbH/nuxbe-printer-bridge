@@ -4,14 +4,18 @@ use std::time::Duration;
 use async_trait::async_trait;
 use reverb_rs::private_channel;
 use reverb_rs::{EventHandler, ReverbClient};
+use tokio::time;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::models::Config;
 use crate::services::print_job::{
     JobContext, fetch_and_print_job_by_id, fetch_incomplete_jobs, process_print_job,
 };
 use crate::utils::config::read_config;
+
+/// How often the channel subscription is tried after a connection came up.
+const SUBSCRIBE_ATTEMPTS: u32 = 10;
 
 /// Payload of a `PrintJobCreated` event: `{"model":{"id":20}}`
 #[derive(serde::Deserialize)]
@@ -37,14 +41,24 @@ impl EventHandler for PrintJobHandler {
 
         // Now that we have a socket_id, subscribe to the channel
         let channel_name = "print_job.";
-        let channel = private_channel(channel_name);
 
-        match self.client.subscribe(channel).await {
-            Ok(_) => info!(channel = %channel_name, "Subscribed to channel"),
-            Err(e) => {
-                error!(channel = %channel_name, error = %e, "Failed to subscribe to channel");
+        // The server can announce the connection before connect() has stored
+        // it, the subscription then fails with "Not connected". Without a
+        // retry the bridge would stay up and never hear of a print job.
+        for attempt in 1..=SUBSCRIBE_ATTEMPTS {
+            match self.client.subscribe(private_channel(channel_name)).await {
+                Ok(_) => {
+                    info!(channel = %channel_name, "Subscribed to channel");
+                    return;
+                }
+                Err(e) => {
+                    warn!(channel = %channel_name, attempt, error = %e, "Failed to subscribe to channel");
+                }
             }
+            time::sleep(Duration::from_millis(500)).await;
         }
+
+        error!(channel = %channel_name, "Giving up subscribing to channel");
     }
 
     async fn on_channel_subscription_succeeded(&self, channel: &str) {
