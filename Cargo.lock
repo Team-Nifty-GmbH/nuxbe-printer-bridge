@@ -1452,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "nuxbe-printer-bridge"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "async-trait",
  "clap",
