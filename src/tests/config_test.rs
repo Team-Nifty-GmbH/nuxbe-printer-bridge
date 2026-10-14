@@ -39,3 +39,19 @@ fn test_temp_dir_creation() {
     // Just verify it exists now
     assert!(dir.path().exists());
 }
+
+#[test]
+fn a_config_written_before_mercure_still_loads_with_mercure_off() {
+    let config: crate::models::Config = serde_json::from_str(
+        r#"{"instance_name":"x","printer_check_interval":5,"job_check_interval":2,
+        "flux_url":"https://flux.test","flux_api_token":"t","api_port":8080,
+        "reverb_disabled":false,"reverb_app_id":"a","reverb_app_key":"k",
+        "reverb_app_secret":"s","reverb_use_tls":true,"reverb_host":"flux.test",
+        "reverb_auth_endpoint":"https://flux.test/broadcasting/auth"}"#,
+    )
+    .unwrap();
+
+    assert!(!config.mercure_enabled);
+    assert!(config.mercure_hub_url.is_none());
+    assert!(!config.reverb_disabled);
+}

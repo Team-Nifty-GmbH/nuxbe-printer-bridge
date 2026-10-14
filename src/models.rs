@@ -66,6 +66,10 @@ pub struct Config {
     pub reverb_use_tls: bool,
     pub reverb_host: Option<String>,
     pub reverb_auth_endpoint: String,
+    #[serde(default)]
+    pub mercure_enabled: bool,
+    #[serde(default)]
+    pub mercure_hub_url: Option<String>,
 }
 
 impl Default for Config {
@@ -84,6 +88,8 @@ impl Default for Config {
             reverb_use_tls: true,
             reverb_host: None,
             reverb_auth_endpoint: "http://example.com/auth".to_string(),
+            mercure_enabled: false,
+            mercure_hub_url: None,
         }
     }
 }
