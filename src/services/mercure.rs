@@ -14,7 +14,6 @@ use crate::utils::config::read_config;
 use crate::utils::http::with_auth_header;
 
 const CHANNEL: &str = "private-print_job.";
-const COOKIE: &str = "mercureAuthorization=";
 
 /// The hub sends a heartbeat every 40 seconds by default.
 const SILENCE_LIMIT: Duration = Duration::from_secs(90);
@@ -83,14 +82,14 @@ async fn subscribe(
         return Err(format!("Mercure authorization failed: {}", response.status()).into());
     }
 
-    let token = response
-        .headers()
-        .get_all(SET_COOKIE)
-        .iter()
-        .filter_map(|value| value.to_str().ok()?.strip_prefix(COOKIE))
-        .find_map(|cookie| cookie.split(';').next())
-        .map(str::to_owned)
-        .ok_or("Mercure authorization returned no subscriber token")?;
+    let token = subscriber_token(
+        response
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok()),
+    )
+    .ok_or("Mercure authorization returned no subscriber token")?;
 
     let authorization: Authorization = response.json().await?;
 
@@ -167,6 +166,15 @@ async fn subscribe(
             }
         }
     }
+}
+
+pub(crate) fn subscriber_token<'a>(cookies: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    cookies.into_iter().find_map(|cookie| {
+        let (name, rest) = cookie.split_once('=')?;
+        name.to_ascii_lowercase()
+            .contains("mercure")
+            .then(|| rest.split(';').next().unwrap_or_default().to_owned())
+    })
 }
 
 /// Remove every complete server-sent event from the buffer and return the
