@@ -1,4 +1,6 @@
-use crate::services::mercure::{subscriber_token, take_events};
+use std::time::Duration;
+
+use crate::services::mercure::{renew_after, subscriber_token, take_events};
 
 #[test]
 fn take_events_keeps_an_incomplete_event_for_the_next_chunk() {
@@ -37,4 +39,9 @@ fn subscriber_token_is_found_under_any_mercure_cookie_name() {
     }
 
     assert_eq!(subscriber_token(["laravel_session=xyz; path=/"]), None);
+}
+
+#[test]
+fn subscription_is_renewed_before_the_hub_drops_the_expired_token() {
+    assert_eq!(renew_after(300), Duration::from_secs(240));
 }
