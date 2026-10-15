@@ -483,7 +483,8 @@ pub async fn fetch_and_print_job_by_id(
 
 // ── Background tasks ────────────────────────────────────────────────────────
 
-/// Background task to periodically check for print jobs (polling mode)
+/// Background task to periodically check for print jobs, also behind a push
+/// connection to pick up events it lost
 pub async fn job_checker_task(
     config: Arc<RwLock<Config>>,
     ctx: JobContext,
@@ -491,12 +492,6 @@ pub async fn job_checker_task(
 ) {
     loop {
         let config_snapshot = read_config(&config);
-
-        if !config_snapshot.reverb_disabled {
-            info!("Polling is disabled. Using Reverb WebSockets instead");
-            return;
-        }
-
         let interval = config_snapshot.job_check_interval.max(1);
 
         match fetch_print_jobs(&config_snapshot, &ctx).await {

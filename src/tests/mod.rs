@@ -5,6 +5,8 @@ pub mod config_test;
 #[cfg(test)]
 pub mod integration_test;
 #[cfg(test)]
+pub mod mercure_test;
+#[cfg(test)]
 pub mod print_job_service_test;
 #[cfg(test)]
 pub mod printer_service_test;

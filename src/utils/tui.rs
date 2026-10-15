@@ -35,6 +35,7 @@ fn create_config_dialog(siv: &mut Cursive, config: Arc<Mutex<Config>>) {
     let interval_settings = create_interval_settings(&current_config);
     let api_settings = create_api_settings(&current_config);
     let reverb_settings = create_reverb_settings(&current_config);
+    let mercure_settings = create_mercure_settings(&current_config);
 
     // Create the main dialog
     siv.add_layer(
@@ -46,6 +47,7 @@ fn create_config_dialog(siv: &mut Cursive, config: Arc<Mutex<Config>>) {
                     .child(interval_settings)
                     .child(api_settings)
                     .child(reverb_settings)
+                    .child(mercure_settings)
                     .child(
                         TextView::new(
                             "Changes will be applied after saving and restarting the server.",
@@ -195,6 +197,34 @@ fn create_reverb_settings(config: &Config) -> impl View {
     )
 }
 
+/// Create Mercure settings section
+fn create_mercure_settings(config: &Config) -> impl View {
+    PaddedView::new(
+        Margins::lrtb(1, 1, 0, 1),
+        Dialog::around(
+            LinearLayout::vertical()
+                .child(
+                    LinearLayout::horizontal()
+                        .child(
+                            Checkbox::new()
+                                .with_checked(config.mercure_enabled)
+                                .with_name("mercure_enabled"),
+                        )
+                        .child(TextView::new(" Enable Mercure")),
+                )
+                .child(TextView::new(
+                    "Mercure Hub URL (empty: <Flux URL>/.well-known/mercure)",
+                ))
+                .child(
+                    EditView::new()
+                        .content(config.mercure_hub_url.clone().unwrap_or_default())
+                        .with_name("mercure_hub_url"),
+                ),
+        )
+        .title("Mercure Settings"),
+    )
+}
+
 /// Save configuration from UI values
 fn save_config_from_ui(s: &mut Cursive, config: Arc<Mutex<Config>>) {
     // Get a mutable reference to the config
@@ -288,6 +318,22 @@ fn save_config_from_ui(s: &mut Cursive, config: Arc<Mutex<Config>>) {
             view.get_content().to_string()
         })
         .unwrap_or_default();
+
+    config_guard.mercure_enabled = s
+        .call_on_name("mercure_enabled", |view: &mut Checkbox| view.is_checked())
+        .unwrap_or(false);
+
+    let mercure_hub_url = s
+        .call_on_name("mercure_hub_url", |view: &mut EditView| {
+            view.get_content().to_string()
+        })
+        .unwrap_or_default();
+
+    config_guard.mercure_hub_url = if mercure_hub_url.is_empty() {
+        None
+    } else {
+        Some(mercure_hub_url)
+    };
 
     // Save the updated configuration
     save_config(&config_guard);

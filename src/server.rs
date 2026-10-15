@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+use crate::services::mercure::mercure_task;
 use crate::services::print_job::{
     JobContext, job_checker_task, job_status_checker_task, new_in_flight_jobs,
 };
@@ -37,6 +38,11 @@ pub async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
             cancel_token.clone(),
         )),
         tokio::spawn(websocket_task(
+            config.clone(),
+            ctx.clone(),
+            cancel_token.clone(),
+        )),
+        tokio::spawn(mercure_task(
             config.clone(),
             ctx.clone(),
             cancel_token.clone(),

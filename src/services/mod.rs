@@ -1,3 +1,4 @@
+pub mod mercure;
 pub mod print_job;
 pub mod printer;
 pub mod printer_sync;

@@ -9,9 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::models::Config;
-use crate::services::print_job::{
-    JobContext, fetch_and_print_job_by_id, fetch_incomplete_jobs, process_print_job,
-};
+use crate::services::print_job::{JobContext, fetch_and_print_job_by_id, fetch_print_jobs};
 use crate::utils::config::read_config;
 
 /// How often the channel subscription is tried after a connection came up.
@@ -26,6 +24,29 @@ struct WebsocketMessage {
 #[derive(serde::Deserialize)]
 struct WebsocketModel {
     id: u32,
+}
+
+/// Fetch and print the job of a `PrintJobCreated` event in the background.
+/// Reverb sends the event name with or without a leading dot.
+pub(crate) fn print_created_job(event: &str, data: &str, config: Config, ctx: JobContext) {
+    if event.trim_start_matches('.') != "PrintJobCreated" {
+        return;
+    }
+
+    let job_id = match serde_json::from_str::<WebsocketMessage>(data) {
+        Ok(message) => message.model.id,
+        Err(e) => {
+            error!(error = %e, raw_data = %data, "Failed to parse print job data");
+            return;
+        }
+    };
+
+    info!(job_id, "Received print job creation event");
+    tokio::spawn(async move {
+        if let Err(e) = fetch_and_print_job_by_id(job_id, &config, &ctx).await {
+            error!(job_id, error = %e, "Error handling print job event");
+        }
+    });
 }
 
 struct PrintJobHandler {
@@ -64,35 +85,11 @@ impl EventHandler for PrintJobHandler {
     async fn on_channel_subscription_succeeded(&self, channel: &str) {
         info!(channel, "Successfully subscribed to channel");
 
-        // Fetch any pending jobs that were created while offline
-        info!("Fetching pending print jobs from API...");
         let config = read_config(&self.config);
         let ctx = self.ctx.clone();
-
         tokio::spawn(async move {
-            let jobs = match fetch_incomplete_jobs(&ctx.http_client, &config).await {
-                Ok(jobs) => jobs,
-                Err(e) => {
-                    error!(error = %e, "Failed to fetch pending print jobs");
-                    return;
-                }
-            };
-
-            let pending: Vec<_> = jobs.into_iter().filter(|j| !j.is_in_flight()).collect();
-            if pending.is_empty() {
-                info!("No pending print jobs found");
-                return;
-            }
-
-            info!(
-                count = pending.len(),
-                "Found pending print jobs, processing..."
-            );
-            for job in pending {
-                info!(job_id = job.id, "Processing pending job");
-                if let Err(e) = process_print_job(&job, &config, &ctx).await {
-                    error!(job_id = job.id, error = %e, "Failed to process pending job");
-                }
+            if let Err(e) = fetch_print_jobs(&config, &ctx).await {
+                error!(error = %e, "Failed to fetch pending print jobs");
             }
         });
     }
@@ -105,33 +102,7 @@ impl EventHandler for PrintJobHandler {
             "Received channel event"
         );
 
-        // Check for both formats: "PrintJobCreated" and ".PrintJobCreated"
-        if event != "PrintJobCreated" && event != ".PrintJobCreated" {
-            return;
-        }
-
-        match serde_json::from_str::<WebsocketMessage>(data) {
-            Ok(message) => {
-                let job_id = message.model.id;
-                info!(job_id, "Received print job creation event");
-
-                let config = read_config(&self.config);
-                let ctx = self.ctx.clone();
-
-                // Spawn a new task to fetch and print the job
-                tokio::spawn(async move {
-                    match fetch_and_print_job_by_id(job_id, &config, &ctx).await {
-                        Ok(_) => info!(job_id, "Successfully handled print job from WebSocket"),
-                        Err(e) => {
-                            error!(job_id, error = %e, "Error handling print job from WebSocket");
-                        }
-                    }
-                });
-            }
-            Err(e) => {
-                error!(error = %e, raw_data = %data, "Failed to parse print job data");
-            }
-        }
+        print_created_job(event, data, read_config(&self.config), self.ctx.clone());
     }
 
     async fn on_error(&self, code: u32, message: &str) {

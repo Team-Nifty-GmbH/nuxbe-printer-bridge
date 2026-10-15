@@ -105,6 +105,8 @@ The configuration is stored in `~/.config/nuxbe-printer-bridge/config.json` and 
 - `reverb_use_tls`: Whether to use WSS (secure WebSocket)
 - `reverb_host`: Reverb server hostname
 - `reverb_auth_endpoint`: Broadcasting auth URL
+- `mercure_enabled`: Whether to receive print jobs from the Mercure hub of the instance
+- `mercure_hub_url`: Mercure hub URL, defaults to `<flux_url>/.well-known/mercure`
 
 ## Usage
 
@@ -229,6 +231,12 @@ On initial WebSocket connection, the application automatically fetches any pendi
 
 The WebSocket connection automatically reconnects if it fails, with a configurable delay between reconnection attempts.
 
+## Mercure Integration
+
+Instances without Reverb broadcast over the Mercure hub built into FrankenPHP. With `mercure_enabled` the bridge authorizes `private-print_job.` at `<flux_url>/api/broadcasting/auth` with its API token, so no broadcasting secret is stored on the device, and listens to the hub for `PrintJobCreated` events. The subscriber token is renewed when it expires, and pending jobs are fetched on every subscription.
+
+Polling keeps running next to Reverb and Mercure at `job_check_interval`, so a lost event delays a job instead of dropping it.
+
 ## Troubleshooting
 
 ### Empty Printer List
@@ -263,7 +271,7 @@ sudo journalctl -u cups.service
 
 1. Verify Reverb configuration settings
 2. Check for firewall blocking WebSocket connections
-3. Consider enabling polling by setting `reverb_disabled` to true
+3. Switch to Mercure (`mercure_enabled`) or rely on polling by setting `reverb_disabled` to true
 
 ## License
 
