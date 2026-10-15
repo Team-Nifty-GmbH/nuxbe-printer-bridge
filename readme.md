@@ -1,6 +1,6 @@
 # Nuxbe Printer Bridge
 
-A Rust application that bridges between Nuxbe ERP and CUPS (Common UNIX Printing System) to manage printers and handle print jobs. It provides real-time WebSocket integration, CLI printing, and automatic synchronization between the systems.
+A Rust application that bridges between Nuxbe ERP and CUPS (Common UNIX Printing System) to manage printers and handle print jobs. It receives print jobs in real time over Laravel Reverb or Mercure, prints from the command line, and automatic synchronization between the systems.
 
 ## Installation from APT Repository
 
@@ -26,10 +26,10 @@ sudo apt install nuxbe-printer-bridge
   - Automatic URI, media size, and system name propagation to the ERP
 
 - **Print Job Processing**:
-  - Real-time print job notifications via Laravel Reverb WebSocket
-  - Periodic polling for new print jobs when WebSocket is disabled
+  - Real-time print job notifications via Laravel Reverb or Mercure
+  - Periodic polling for new print jobs as a safety net, always running
   - Automated download and printing of documents
-  - Job status updates after printing
+  - Job status (queued, processing, completed, failed) reported back from CUPS
 
 - **CLI Printing**:
   - Print local files directly from command line
@@ -46,7 +46,8 @@ sudo apt install nuxbe-printer-bridge
 
 - CUPS installed and configured
 - Network connection to Nuxbe ERP instance
-- Laravel Reverb for WebSocket functionality (optional)
+- Laravel Reverb or a Mercure hub (FrankenPHP) for real-time jobs (optional)
+- An API token with the permissions listed under [API Token](#api-token)
 - Rust 2024 edition (only for building from source)
 
 ## Installation
@@ -92,13 +93,13 @@ The application can be configured using the built-in configuration tool:
 nuxbe-printer-bridge config
 ```
 
-The configuration is stored in `~/.config/nuxbe-printer-bridge/config.json` and includes:
+The configuration is stored in `~/.config/nuxbe-printer-bridge/config.json` of the user running the bridge. The APT package runs the service as root, so there it is `/root/.config/nuxbe-printer-bridge/config.json`. It includes:
 
 - `instance_name`: Unique identifier for this print server (used as `spooler_name` in the API)
 - `printer_check_interval`: How often to check for printer changes (minutes)
 - `job_check_interval`: How often to check for print jobs (minutes)
 - `flux_url`: Base URL for the Nuxbe ERP API
-- `flux_api_token`: Sanctum Bearer token for API authentication
+- `flux_api_token`: Sanctum Bearer token for API authentication, see [API Token](#api-token)
 - `api_port`: Local API port (default: 8080)
 - `reverb_disabled`: Whether to disable WebSocket and use polling instead
 - `reverb_app_id`, `reverb_app_key`, `reverb_app_secret`: Laravel Reverb credentials
@@ -128,7 +129,7 @@ nuxbe-printer-bridge -vvv run    # trace level
 The server will:
 1. Detect all available CUPS printers
 2. Synchronize printers with the Nuxbe ERP system
-3. Listen for print jobs via WebSocket or polling
+3. Listen for print jobs via Reverb or Mercure, with polling as a safety net
 
 ### CLI Commands
 
@@ -177,14 +178,16 @@ All API requests include the `instance_name` as `spooler_name` in the request bo
 
 For print jobs, the application:
 
-1. Receives job notifications via WebSocket (`PrintJobCreated` event) or periodic polling
-2. On WebSocket connect, fetches any pending jobs created while offline
+1. Receives job notifications via Reverb or Mercure (`PrintJobCreated` event) or periodic polling
+2. On every (re)connect, fetches any pending jobs created while offline
 3. Fetches full job details from the API (GET `/api/print-jobs/{id}?include=printer`)
 4. Downloads the document via media ID (GET `/api/media/private/{media_id}`)
 5. Prints the file on the appropriate CUPS printer (falls back to default if specified printer not found)
-6. Marks the job as completed (PUT `/api/print-jobs` with ID in body, `is_completed: true`)
+6. Reports the CUPS status back (PUT `/api/print-jobs` with ID in body: `status`, `cups_job_id`, `is_completed` once the job is finished)
 
 ### Setting up as a System Service (Linux)
+
+The APT package installs and enables `nuxbe-printer-bridge.service` (running as root) itself. The steps below are only needed when building from source.
 
 1. Create a systemd service file:
 ```bash
@@ -233,9 +236,26 @@ The WebSocket connection automatically reconnects if it fails, with a configurab
 
 ## Mercure Integration
 
-Instances without Reverb broadcast over the Mercure hub built into FrankenPHP. With `mercure_enabled` the bridge authorizes `private-print_job.` at `<flux_url>/api/broadcasting/auth` with its API token, so no broadcasting secret is stored on the device, and listens to the hub for `PrintJobCreated` events. The subscriber token is renewed when it expires, and pending jobs are fetched on every subscription.
+Instances without Reverb broadcast over the Mercure hub built into FrankenPHP. With `mercure_enabled` the bridge authorizes `private-print_job.` at `<flux_url>/api/broadcasting/auth` with its API token, so no broadcasting secret is stored on the device, and listens to the hub for `PrintJobCreated` events. The hub only answers to the subscriber token that comes back as a cookie. Its name follows `MERCURE_COOKIE_NAME` of the instance and may carry a `__Secure-` prefix, so the bridge takes any cookie named after Mercure. The hub drops a subscription shortly before that token expires, so the bridge renews it after 80 % of its lifetime (240 s of the default 300 s). Pending jobs are fetched on every subscription.
 
 Polling keeps running next to Reverb and Mercure at `job_check_interval`, so a lost event delays a job instead of dropping it.
+
+## API Token
+
+Create the token in Nuxbe under Settings → Tokens with the ability "All" and these permissions:
+
+| Permission | Used for |
+|---|---|
+| `api.printers.get` | Fetch the printers of this instance |
+| `action.printer.create` | Register new CUPS printers |
+| `action.printer.update` | Update changed printers |
+| `action.printer.delete` | Remove printers that are gone |
+| `api.print-jobs.get` | Poll for pending jobs |
+| `api.print-jobs.{id}.get` | Fetch a single job |
+| `action.print_job.update` | Report the job status |
+| `action.media.download` | Download the document to print |
+
+Broadcasting auth (`/api/broadcasting/auth`, used for Mercure) needs no extra permission, only the ability.
 
 ## Troubleshooting
 
@@ -260,7 +280,7 @@ lpstat -v
 ### Print Jobs Not Processing
 
 1. Ensure your instance_name is correctly configured
-2. Check that the API token has the necessary permissions
+2. Check that the API token has the permissions listed under [API Token](#api-token)
 3. Verify printer IDs match between the API and local system
 4. Check CUPS logs for printing errors:
 ```bash
