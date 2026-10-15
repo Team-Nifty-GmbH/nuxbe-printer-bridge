@@ -110,7 +110,7 @@ async fn subscribe(
         authorization.topic_prefix,
         urlencoding::encode(CHANNEL)
     );
-    let lifetime = Duration::from_secs(authorization.expires_in);
+    let lifetime = renew_after(authorization.expires_in);
 
     let mut stream = ctx
         .http_client
@@ -166,6 +166,10 @@ async fn subscribe(
             }
         }
     }
+}
+
+pub(crate) fn renew_after(expires_in: u64) -> Duration {
+    Duration::from_secs(expires_in * 4 / 5)
 }
 
 pub(crate) fn subscriber_token<'a>(cookies: impl IntoIterator<Item = &'a str>) -> Option<String> {
