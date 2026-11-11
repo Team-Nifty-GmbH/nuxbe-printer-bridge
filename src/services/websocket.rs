@@ -42,7 +42,11 @@ pub(crate) fn print_created_job(event: &str, data: &str, config: Config, ctx: Jo
     };
 
     info!(job_id, "Received print job creation event");
+    // Enter synchronously, before the job is fetched, so a later event can
+    // never reach CUPS ahead of this one.
+    let ticket = ctx.submit_order.enter(job_id);
     tokio::spawn(async move {
+        let _ticket = ticket;
         if let Err(e) = fetch_and_print_job_by_id(job_id, &config, &ctx).await {
             error!(job_id, error = %e, "Error handling print job event");
         }

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -7,6 +7,7 @@ use printers::common::base::job::{PrinterJobOptions, PrinterJobState};
 use printers::{get_printer_by_name, get_printers};
 use reqwest::Client;
 use tempfile::NamedTempFile;
+use tokio::sync::Notify;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
@@ -73,12 +74,74 @@ pub fn new_in_flight_jobs() -> InFlightJobs {
     Arc::new(Mutex::new(InFlightTracker::default()))
 }
 
+/// Hands jobs to CUPS strictly by ascending print job id, so labels come out
+/// in the order Flux created them while downloads still run in parallel.
+///
+/// A job enters when it is announced (event or poll), before anything async
+/// happens, and waits for its turn right before the CUPS submission. The
+/// ticket leaves on drop, also when the job fails, so nothing waits forever.
+// ponytail: one gate for all printers, the event payload names no printer.
+// A slow download also delays other printers; per printer gates if that matters.
+#[derive(Clone, Default)]
+pub struct SubmitOrder(Arc<(Mutex<BTreeMap<u32, usize>>, Notify)>);
+
+/// A job's place in the [`SubmitOrder`], released on drop.
+pub struct SubmitTicket {
+    order: SubmitOrder,
+    job_id: u32,
+}
+
+impl SubmitOrder {
+    /// Announce a job. Counted, so a job announced twice (event and poll)
+    /// stays pending until both tickets are gone.
+    pub fn enter(&self, job_id: u32) -> SubmitTicket {
+        *lock(&self.0.0).entry(job_id).or_default() += 1;
+        SubmitTicket {
+            order: self.clone(),
+            job_id,
+        }
+    }
+
+    /// Wait until no announced job with a lower id is pending anymore.
+    async fn wait_turn(&self, job_id: u32) {
+        loop {
+            let notified = self.0.1.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            if lock(&self.0.0)
+                .keys()
+                .next()
+                .is_none_or(|&first| first >= job_id)
+            {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+impl Drop for SubmitTicket {
+    fn drop(&mut self) {
+        let mut pending = lock(&self.order.0.0);
+        if let Some(count) = pending.get_mut(&self.job_id) {
+            *count -= 1;
+            if *count == 0 {
+                pending.remove(&self.job_id);
+            }
+        }
+        drop(pending);
+        self.order.0.1.notify_waiters();
+    }
+}
+
 /// Shared handles the print workflow needs, bundled to keep signatures small.
 #[derive(Clone)]
 pub struct JobContext {
     pub http_client: Client,
     pub in_flight_jobs: InFlightJobs,
     pub printer_cache: PrinterCache,
+    pub submit_order: SubmitOrder,
 }
 
 /// Maximum time (seconds) to wait for a CUPS job before marking it as failed.
@@ -86,6 +149,9 @@ const CUPS_JOB_TIMEOUT_SECS: u64 = 300; // 5 minutes
 
 /// Maximum time (seconds) for a media file download (overrides the client default).
 const DOWNLOAD_TIMEOUT_SECS: u64 = 300;
+
+/// Pause (ms) between download and the turn check, see `submit_print_job`.
+const SUBMIT_GRACE_MS: u64 = 1000;
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 
@@ -326,6 +392,13 @@ async fn submit_print_job(job: &PrintJob, config: &Config, ctx: &JobContext) -> 
         .ok_or("Invalid temp file path")?
         .to_string();
 
+    // Flux broadcasts PrintJobCreated through the queue, so parallel workers
+    // can deliver a burst slightly out of order. Give a lower id that is
+    // still on its way the chance to enter before this job takes its turn.
+    // ponytail: fixed grace, a job announced later than this can still be overtaken.
+    time::sleep(Duration::from_millis(SUBMIT_GRACE_MS)).await;
+    ctx.submit_order.wait_turn(job.id).await;
+
     let cups_job = job.clone();
     let printer_id = job.printer.as_ref().map(|p| p.id).or(job.printer_id);
     let printer_name = job.printer.as_ref().map(|p| p.name.clone());
@@ -391,7 +464,8 @@ async fn submit_print_job(job: &PrintJob, config: &Config, ctx: &JobContext) -> 
     Ok(())
 }
 
-/// Fetch print jobs from the API and process them concurrently.
+/// Fetch print jobs from the API and process them concurrently; they still
+/// reach CUPS by job id through the [`SubmitOrder`].
 pub async fn fetch_print_jobs(config: &Config, ctx: &JobContext) -> SpoolerResult<Vec<PrintJob>> {
     let jobs = fetch_incomplete_jobs(&ctx.http_client, config).await?;
 
@@ -402,17 +476,25 @@ pub async fn fetch_print_jobs(config: &Config, ctx: &JobContext) -> SpoolerResul
 
     info!(job_count = jobs.len(), "Processing print jobs");
 
-    let mut handles = Vec::new();
-    for job in &jobs {
-        if job.is_in_flight() {
-            debug!(job_id = job.id, "Skipping in-flight job");
-            continue;
-        }
+    // Enter all jobs before the first task runs, so none can overtake a lower id.
+    let pending: Vec<(PrintJob, SubmitTicket)> = jobs
+        .iter()
+        .filter(|job| {
+            let in_flight = job.is_in_flight();
+            if in_flight {
+                debug!(job_id = job.id, "Skipping in-flight job");
+            }
+            !in_flight
+        })
+        .map(|job| (job.clone(), ctx.submit_order.enter(job.id)))
+        .collect();
 
-        let job = job.clone();
+    let mut handles = Vec::new();
+    for (job, ticket) in pending {
         let config = config.clone();
         let ctx = ctx.clone();
         handles.push(tokio::spawn(async move {
+            let _ticket = ticket;
             if let Err(e) = process_print_job(&job, &config, &ctx).await {
                 error!(job_id = job.id, error = %e, "Failed to process print job");
             }
@@ -790,6 +872,50 @@ mod tests {
         tracker.track_if_new(in_flight(1));
         tracker.track_if_new(in_flight(1));
         assert_eq!(tracker.jobs.len(), 1);
+    }
+
+    /// Downloads finishing in reverse order must still reach CUPS by job id.
+    #[tokio::test]
+    async fn submit_order_hands_jobs_over_by_id_despite_download_speed() {
+        let order = SubmitOrder::default();
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+
+        let mut handles = Vec::new();
+        for (job_id, download_ms) in [(165, 60), (166, 40), (167, 5), (168, 20)] {
+            let ticket = order.enter(job_id);
+            let order = order.clone();
+            let submitted = submitted.clone();
+            handles.push(tokio::spawn(async move {
+                let _ticket = ticket;
+                time::sleep(Duration::from_millis(download_ms)).await;
+                order.wait_turn(job_id).await;
+                lock(&submitted).push(job_id);
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        assert_eq!(*lock(&submitted), vec![165, 166, 167, 168]);
+    }
+
+    /// A job that fails before submission must not block the ones after it.
+    #[tokio::test]
+    async fn submit_order_skips_failed_job() {
+        let order = SubmitOrder::default();
+        let failed = order.enter(1);
+        let _second = order.enter(2);
+
+        let waiting = tokio::spawn({
+            let order = order.clone();
+            async move { order.wait_turn(2).await }
+        });
+        drop(failed);
+
+        time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("job 2 must not wait for a failed job 1")
+            .unwrap();
     }
 
     #[test]
