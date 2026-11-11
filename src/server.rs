@@ -20,6 +20,7 @@ pub async fn run_server(verbose_debug: bool) -> std::io::Result<()> {
         http_client: build_http_client(),
         in_flight_jobs: new_in_flight_jobs(),
         printer_cache: new_printer_cache(),
+        submit_order: Default::default(),
     };
 
     // The printer checker's first iteration runs immediately and doubles as

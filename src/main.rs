@@ -49,6 +49,7 @@ async fn main() -> std::io::Result<()> {
                     http_client: build_http_client(),
                     in_flight_jobs: new_in_flight_jobs(),
                     printer_cache: new_printer_cache(),
+                    submit_order: Default::default(),
                 };
                 match fetch_and_print_job_by_id(job_id, &config, &ctx).await {
                     Ok(_) => {}
